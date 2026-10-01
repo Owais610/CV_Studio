@@ -3,8 +3,8 @@
 CV Studio  -  build a professional CV on the left and review the live PDF on the right.
 
 Requirements
-    pip install reportlab            (required)
-    pip install pymupdf              (optional - enables the live preview pane)
+    python -m pip install -r requirements.txt
+    Python 3.10+ with Tkinter (see README for Windows/macOS/Linux setup).
 
 Text formatting
     Select text and use Bold / Ctrl+B, Italic / Ctrl+I, or Link / Ctrl+K.
@@ -36,6 +36,7 @@ from cv_studio_pdf import SourceParagraph
 from cv_studio_templates import DEFAULT_TEMPLATE, TEMPLATES, RuledHeading, polish_classic_styles, build as build_template
 from cv_studio_photo import normalize_crop
 from cv_studio_sections import normalize_sections, is_custom
+from cv_studio_appearance import DEFAULT_UI_THEME, DEFAULT_UI_MODE, DEFAULT_UI_STYLE, normalize_ui_theme, normalize_ui_style
 from cv_studio_templates import custom_section
 import reportlab
 from reportlab.lib import colors
@@ -124,7 +125,9 @@ DEFAULT_DATA = {
         "theme": "Navy Blue",
         "template": DEFAULT_TEMPLATE,
         "photo": "",
-        "ui_mode": "Light",
+        "ui_mode": DEFAULT_UI_MODE,
+        "ui_theme": DEFAULT_UI_THEME,
+        "ui_style": DEFAULT_UI_STYLE,
         "font_scale": 100,
         "margin_mm": 13,
         "autofit": True,
@@ -153,9 +156,15 @@ def setup_fonts():
         here / "fonts", here,
         Path("/usr/share/fonts/truetype/dejavu"), Path("/usr/share/fonts/dejavu"),
         Path("/usr/share/fonts/TTF"), Path("/Library/Fonts"), Path("/System/Library/Fonts/Supplemental"),
-        Path(os.environ.get("WINDIR", r"C:\Windows")) / "Fonts",
-        Path.home() / "AppData/Local/Microsoft/Windows/Fonts",
+        Path.home() / ".local/share/fonts", Path.home() / ".fonts", Path.home() / "Library/Fonts",
     ]
+    if sys.platform == "win32":
+        windows_dir = os.environ.get("WINDIR") or os.environ.get("SystemRoot")
+        local_data = os.environ.get("LOCALAPPDATA")
+        if windows_dir:
+            dirs.append(Path(windows_dir) / "Fonts")
+        if local_data:
+            dirs.append(Path(local_data) / "Microsoft/Windows/Fonts")
     try:
         import matplotlib
         dirs.append(Path(matplotlib.get_data_path()) / "fonts" / "ttf")
@@ -510,6 +519,8 @@ def migrate(raw):
 
     st = d["settings"]
     st.update({k: v for k, v in settings_raw.items() if k != "sections"})
+    st['ui_theme'] = normalize_ui_theme(st.get('ui_theme'))
+    st['ui_style'] = normalize_ui_style(st.get('ui_style'))
     if st.get('template') not in TEMPLATES:
         st['template'] = DEFAULT_TEMPLATE
     if not isinstance(st.get('photo'), str):

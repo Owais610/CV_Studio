@@ -1,2 +1,12 @@
 __pycache__/
 *.pyc
+.venv/
+venv/
+.pytest_cache/
+test_artifacts/
+*_BACKUP.py
+# Local CV documents/exports can contain private information.
+*.pdf
+my_cv*.json
+.DS_Store
+Thumbs.db

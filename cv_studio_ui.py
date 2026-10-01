@@ -27,7 +27,10 @@ from cv_studio_richtext import Format, NORMAL, parse, plain, runs, serialize, no
 from cv_studio_templates import DEFAULT_TEMPLATE, TEMPLATES
 from cv_studio_reorder import ReorderController, LineHandles, can_scroll_view
 from cv_studio_photo import PhotoCropDialog, import_photo, normalize_crop, decode_photo, crop_image
-from cv_studio_sections import is_custom, new_section_key
+from cv_studio_sections import is_custom, new_section_key, ENTRY_TYPES, ENTRY_CHOICES, entry_type, empty_entry, ENTRY_LAYOUTS, entry_layout
+from cv_studio_appearance import (BUTTON_THEMES, DEFAULT_UI_THEME, DEFAULT_UI_MODE, DEFAULT_UI_STYLE, UI_STYLES,
+                                  normalize_ui_theme, normalize_ui_style, theme_palette,
+                                  minimal_palette, navigation_material)
 
 
 PALETTES = {
@@ -44,6 +47,20 @@ PALETTES = {
                  warning='#E5BD77', danger='#FF9FA5', rail='#1C222D',
                  softshadow='#12161E', rim='#38414F', focus_line='#597AB8'),
 }
+MINIMAL_PALETTES = {
+    'Light': dict(bg='#F7F7F5', surface='#FFFFFF', field='#FAFAF9', text='#27272A',
+                  muted='#666A70', line='#E4E4E1', hover='#F1F1EF', accent='#27272A',
+                  pressed='#3F3F46', tint='#EEEEEB', accent_text='#FFFFFF',
+                  canvas='#ECEDEB', shadow='#D5D7D5', thumb='#B9BDBB', good='#24714C',
+                  warning='#946318', danger='#A83F45', rail='#F7F7F5',
+                  softshadow='#E9EAE8', rim='#FFFFFF', focus_line='#71717A'),
+    'Dark': dict(bg='#181818', surface='#202020', field='#262626', text='#F3F3F2',
+                 muted='#B3B3B0', line='#363636', hover='#303030', accent='#F3F3F2',
+                 pressed='#D8D8D6', tint='#353535', accent_text='#181818',
+                 canvas='#141414', shadow='#0B0B0B', thumb='#6B6B69', good='#87CDA4',
+                 warning='#E3BC74', danger='#F5A3A5', rail='#1B1B1B',
+                 softshadow='#111111', rim='#424242', focus_line='#D0D0CE'),
+}
 NAVIGATION = [('header', 'Contact', 'Your name, headline, and contact details.'),
               ('profile', 'Profile', 'A concise introduction to your experience and strengths.'),
               ('projects', 'Projects', 'Showcase your work, research, and achievements.'),
@@ -55,7 +72,9 @@ NAVIGATION = [('header', 'Contact', 'Your name, headline, and contact details.')
 
 class Appearance:
     def __init__(self, root):
-        self.root, self.mode, self.listeners = root, 'Light', []
+        self.root, self.mode, self.listeners = root, DEFAULT_UI_MODE, []
+        self.theme = DEFAULT_UI_THEME
+        self.style = DEFAULT_UI_STYLE
         families = set(tkfont.families(root))
         self.family = next((f for f in ('Segoe UI', 'Inter', 'Helvetica Neue', 'DejaVu Sans') if f in families), 'Arial')
         self.fonts = {}
@@ -63,18 +82,25 @@ class Appearance:
                 ('label', 9, 'bold', 'roman'), ('title', 21, 'bold', 'roman'), ('heading', 12, 'bold', 'roman'),
                 ('bold', 10, 'bold', 'roman'), ('italic', 10, 'normal', 'italic'), ('both', 10, 'bold', 'italic')]:
             self.fonts[name] = tkfont.Font(root=root, family=self.family, size=size, weight=weight, slant=slant)
-        self.apply('Light')
+        self.apply(DEFAULT_UI_MODE)
 
     def __getitem__(self, key):
-        return PALETTES[self.mode][key]
+        return self.palette[key]
 
     def watch(self, widget, callback):
         # Bound methods must not retain destroyed cards and their text histories.
         self.listeners.append((weakref.ref(widget), weakref.WeakMethod(callback) if hasattr(callback, '__self__') else callback))
         callback()
 
-    def apply(self, mode):
-        self.mode = mode if mode in PALETTES else 'Light'
+    def apply(self, mode, theme=None, style=None):
+        self.mode = mode if mode in PALETTES else DEFAULT_UI_MODE
+        if theme is not None:
+            self.theme = normalize_ui_theme(theme)
+        if style is not None:
+            self.style = normalize_ui_style(style)
+        self.palette = (minimal_palette(MINIMAL_PALETTES[self.mode],self.mode)
+                        if self.style == 'Minimal' else
+                        theme_palette(PALETTES[self.mode],self.mode,self.theme))
         s = ttk.Style(self.root)
         s.theme_use('clam')
         s.configure('.', background=self['surface'], foreground=self['text'], font=self.fonts['body'])
@@ -177,13 +203,35 @@ class Button(tk.Canvas):
         self.configure(bg=p[self.bg_role])
         self.delete('all')
         w, h = max(self.winfo_width(), int(self.cget('width'))), int(self.cget('height'))
-        fill, fg = p['field'], p['text']
+        if p.style == 'Minimal':
+            fill, fg = p['button_face'], p['button_ink']
+            if self.kind == 'primary':
+                fill, fg = (p['pressed'] if self.hover or self.pressed else p['accent']), p['accent_text']
+            elif self.selected:
+                fill = p['tint']
+            elif self.kind in ('ghost', 'nav'):
+                fill = p[self.bg_role]
+            if self.kind != 'primary' and (self.hover or self.pressed):
+                fill = p['tint'] if self.pressed else p['hover']
+            if self.kind == 'danger':
+                fg = p['danger']
+            if not self.enabled:
+                fg = p['muted']
+            border = (p['focus_line'] if self.focused else
+                      p['button_line'] if self.kind == 'secondary' and not self.selected else fill)
+            rounded(self, 1, 1, w-2, h-2, 6, fill=fill, outline=border, width=1)
+            self.create_text(13 if self.anchor == 'w' else w/2, h/2, text=self.text,
+                             fill=fg, font=self.font, anchor=self.anchor)
+            if getattr(self,'shortcut',''):
+                self.create_text(w-12,h/2,text=self.shortcut,fill=p['muted'],font=p.fonts['small'],anchor='e')
+            return
+        fill, fg = p['button_face'], p['button_ink']
         if self.kind == 'primary':
             fill, fg = p['accent'], p['accent_text']
             if self.hover or self.pressed:
                 fill = p['pressed']
         elif self.selected:
-            fill, fg = p['tint'], p['accent']
+            fill, fg = p['tint'], p['selection_ink']
         elif self.kind in ('ghost', 'nav'):
             fill = p[self.bg_role]
         if self.kind != 'primary' and (self.hover or self.pressed):
@@ -195,7 +243,7 @@ class Button(tk.Canvas):
         raised = self.kind in ('primary', 'secondary') and not self.pressed
         if raised:
             rounded(self, 1, 3, w-2, h-4, 8, fill=p['softshadow'], outline='')
-        border = p['accent'] if self.focused else p['line'] if self.kind=='secondary' else fill
+        border = p['accent'] if self.focused else p['button_line'] if self.kind=='secondary' else fill
         rounded(self, 1, 1, w-2, h-4, 8, fill=fill, outline=border, width=1)
         self.create_text(13 if self.anchor == 'w' else w/2, h/2+(1 if self.pressed else -1), text=self.text,
                          fill=fg, font=self.font, anchor=self.anchor)
@@ -262,7 +310,7 @@ class NavigationButton(Button):
         # drag proxy all keep identical line breaks and row height.
         font=self.ui.fonts['bold']
         available=max(32,width-48)
-        cache_key=(self.text,available,font.metrics('linespace'),font.measure('MW'))
+        cache_key=(self.text,available,font.metrics('linespace'),font.measure('MW'),self.ui.style)
         if self._title_layout and self._title_layout[0]==cache_key:
             return self._title_layout[1]
         lines=[]
@@ -282,14 +330,31 @@ class NavigationButton(Button):
         if line.strip():
             lines.append(line.strip())
         lines=[text.rstrip() for text in lines] or ['']
-        result=('\n'.join(lines),max(48,len(lines)*font.metrics('linespace')+24))
+        vertical_padding = 18 if self.ui.style == 'Minimal' else 24
+        result=('\n'.join(lines),max(40 if self.ui.style == 'Minimal' else 48,
+                                     len(lines)*font.metrics('linespace')+vertical_padding))
         self._title_layout=(cache_key,result)
         return result
 
     def paint_material(self,canvas,width,height,hover,selected,pressed,focused=False,editing=False,lifted=False):
-        p,m=self.ui,self.MATERIALS[self.ui.mode]
+        p=self.ui
         canvas.delete('all')
         canvas.configure(bg=p[self.bg_role])
+        if p.style == 'Minimal':
+            face = self.blend(p[self.bg_role],p['hover'],hover)
+            face = self.blend(face,p['tint'],max(selected,pressed))
+            if editing:
+                face = p['tint']
+            edge = p['focus_line'] if focused or editing else face
+            self.shape(canvas,2,2,width-4,height-4,7,fill=face,outline=edge,
+                       width=1,tags='nav_face')
+            if self.reorderable and not editing and (hover>.02 or focused or lifted):
+                for dx in (0,4):
+                    for dy in (-4,0,4):
+                        x,cy=width-16+dx,height/2+dy
+                        canvas.create_oval(x,cy,x+1,cy+1,fill=p['muted'],outline='',tags='nav_grip')
+            return face,2
+        m=navigation_material(self.MATERIALS[p.mode],p.palette,p.mode)
         depth=max(selected,pressed)
         face=self.blend(self.blend(m['face'],m['hover'],hover),m['active'],selected)
         if editing:
@@ -327,7 +392,8 @@ class NavigationButton(Button):
     def paint_drag_preview(self,canvas,width):
         title,height=self.title_layout(width)
         self.paint_material(canvas,width,height,1.,0.,0.,lifted=True)
-        canvas.create_text(24,(height-8)/2+1,text=title,anchor='w',justify='left',
+        canvas.create_text(18 if self.ui.style == 'Minimal' else 24,(height-8)/2+1,
+                           text=title,anchor='w',justify='left',
                            font=self.ui.fonts['bold'],fill=self.ui['text'],tags='nav_title')
         return width,height
 
@@ -348,15 +414,18 @@ class NavigationButton(Button):
             self._motion_target=target
             self._motion_start=now
         progress=min(1.,(now-self._motion_start)/(.08 if self.pressed else .14))
-        if editing or not self.winfo_viewable() or getattr(self,'_paint_mode',None)!=p.mode:
+        if editing or not self.winfo_viewable() or getattr(self,'_paint_mode',None)!=(p.mode,p.theme,p.style):
             progress=1.
-        self._paint_mode=p.mode
+        self._paint_mode=(p.mode,p.theme,p.style)
         ease=1-(1-progress)**3
         self._motion_value=tuple(start+(end-start)*ease for start,end in zip(self._motion_from,target))
         fill,y=self.paint_material(self,width,height,*self._motion_value,focused=self.focused,editing=editing)
-        fg=p['muted'] if getattr(self,'hidden',False) else self.MATERIALS[p.mode]['ink'] if self.selected else p['text']
+        material=navigation_material(self.MATERIALS[p.mode],p.palette,p.mode)
+        fg=p['muted'] if getattr(self,'hidden',False) else (
+            p['text'] if p.style == 'Minimal' else material['ink'] if self.selected else p['text'])
         if not editing:
-            self.create_text(24,y+(height-8)/2,text=title,anchor='w',justify='left',
+            self.create_text(18 if p.style == 'Minimal' else 24,y+(height-8)/2,
+                             text=title,anchor='w',justify='left',
                              font=p.fonts['bold'] if self.selected else self.font,fill=fg,tags='nav_title')
         if self.rename_entry and self.rename_entry.winfo_exists():
             self.rename_entry.configure(bg=fill,fg=p['text'],insertbackground=p['text'],
@@ -394,6 +463,10 @@ class Surface(Frame):
         canvas.delete('all')
         w, h = self.winfo_width(), self.winfo_height()
         if w<8 or h<8:
+            return
+        if p.style == 'Minimal':
+            edge = p['focus_line'] if self.focused else p['line']
+            rounded(canvas,1,1,w-2,h-2,8,fill=p[self.surface_role],outline=edge,width=1)
             return
         inset = 4 if self.shadow else 2
         if self.shadow:
@@ -448,7 +521,7 @@ class Tooltip:
 
 class PopupMenu(tk.Toplevel):
     """Application-drawn menus so Windows native menu styling cannot override us."""
-    def __init__(self, app, anchor, items):
+    def __init__(self, app, anchor, items, *, width=320, compact=False, font='body'):
         if app.popup and app.popup.winfo_exists():
             app.popup.close()
         super().__init__(app)
@@ -470,7 +543,8 @@ class PopupMenu(tk.Toplevel):
             row = Frame(body, app.ui)
             row.pack(fill='x', padx=5, pady=1)
             b = Button(row, app.ui, label, lambda f=fn: self.choose(f),
-                       kind='danger' if label.startswith('Remove ') else 'ghost', width=320, anchor='w')
+                       kind='danger' if label.startswith('Remove ') else 'ghost',
+                       width=width, compact=compact, font=font, anchor='w')
             b.pack(fill='x')
             b.enabled = enabled
             b.shortcut = shortcut
@@ -563,9 +637,14 @@ class PopupMenu(tk.Toplevel):
 
 
 class Choice(Button):
-    def __init__(self, parent, app, variable, values, command=None, width=170):
+    def __init__(self, parent, app, variable, values, command=None, width=170, *, compact=False, fit_menu=False, font='body'):
         self.app, self.variable, self.values, self.on_change = app, variable, values, command
-        super().__init__(parent, app.ui, '', self.open, width=width, anchor='w')
+        self.compact, self.fit_menu = compact, fit_menu
+        self.choice_font = font
+        if width is None:
+            # Fit the longest option once, so changing themes never shifts the control.
+            width = max(app.ui.fonts[font].measure(str(v)+'   ▾') for v in values)+26
+        super().__init__(parent, app.ui, '', self.open, width=width, compact=compact, font=font, anchor='w')
         self.trace = variable.trace_add('write', self.update_text)
         self.bind('<Destroy>', lambda e: variable.trace_remove('write', self.trace) if e.widget is self else None)
         self.update_text()
@@ -575,8 +654,15 @@ class Choice(Button):
         self.draw()
 
     def open(self):
-        PopupMenu(self.app, self, [(('✓  ' if v == self.variable.get() else '    ')+str(v), '',
-                                  lambda x=v: self.choose(x)) for v in self.values])
+        items = [(('✓  ' if v == self.variable.get() else '    ')+str(v), '',
+                  lambda x=v: self.choose(x)) for v in self.values]
+        options = {}
+        if self.fit_menu:
+            # Account for the popup's 24px horizontal padding; keep checkmarks
+            # and labels readable without the standard full-width menu.
+            row_width = max(self.font.measure('✓  '+str(v))+26 for v in self.values)
+            options = dict(width=max(self.winfo_width()-24,row_width),compact=self.compact,font=self.choice_font)
+        PopupMenu(self.app, self, items, **options)
 
     def choose(self, value):
         self.variable.set(value)
@@ -683,7 +769,6 @@ class SidebarDivider(tk.Canvas):
         self.bind('<Right>',lambda e:self.step(12))
         self.bind('<Escape>',self.cancel)
         app.ui.watch(self,self.draw)
-        Tooltip(self,'Drag to resize the section sidebar · Arrow keys also adjust width')
 
     def draw(self):
         self.configure(bg=self.ui['surface'])
@@ -1214,6 +1299,11 @@ TITLE_KEYS = {'contacts':'text', 'projects':'title', 'skills':'category', 'exper
 class SectionCard(Surface):
     def __init__(self, owner, data, expanded=False):
         self.owner, self.app, self.expanded, self.fields = owner, owner.app, expanded, {}
+        self.entry_kind = entry_type(data) if owner.kind=='custom' else None
+        self.entry_spec = ENTRY_TYPES[self.entry_kind] if self.entry_kind else None
+        form = [field.form() for field in self.entry_spec.fields] if self.entry_spec else FIELDS[owner.kind]
+        form_keys = {field[0] for field in form}
+        self.saved_extras = deepcopy({k:v for k,v in data.items() if k not in form_keys}) if self.entry_spec else {}
         super().__init__(owner.holder, owner.app.ui, padx=18, pady=16)
         self.header = Frame(self, self.ui)
         self.header.pack(fill='x')
@@ -1226,6 +1316,10 @@ class SectionCard(Surface):
         self.chevron.pack(side='left', anchor='n', padx=(0,7))
         self.copy = Frame(self.header, self.ui)
         self.copy.pack(side='left', fill='x', expand=True, pady=4)
+        self.type_label = None
+        if self.entry_spec:
+            self.type_label = Label(self.copy,self.ui,self.entry_spec.label.upper(),font='label',fg='accent',cursor='hand2')
+            self.type_label.pack(anchor='w',pady=(0,4))
         self.title_label = Label(self.copy, self.ui, '', font='bold', cursor='hand2', justify='left')
         self.title_label.pack(fill='x')
         self.subtitle = Label(self.copy, self.ui, '', font='small', fg='muted', cursor='hand2', justify='left')
@@ -1237,14 +1331,14 @@ class SectionCard(Surface):
         self.copy.pack_forget()
         self.copy.pack(side='left', fill='x', expand=True, pady=4)
         Tooltip(self.more, 'Move, duplicate, or remove this entry')
-        for widget in (self.header, self.copy, self.title_label, self.subtitle, self.grip, self.chevron):
+        for widget in (self.header, self.copy, self.title_label, self.subtitle, self.grip, self.chevron) + ((self.type_label,) if self.type_label else ()):
             self.owner.reorder.bind(widget, self, self.toggle if widget is not self.grip else None)
             widget.bind('<Enter>', lambda e: self.header_hover(True), add='+')
             widget.bind('<Leave>', lambda e: self.header_hover(False), add='+')
         self.body = Frame(self, self.ui)
         if expanded:
             self.body.pack(fill='x', pady=(18,0))
-        for key, label, rich, lines, hint in FIELDS[owner.kind]:
+        for key, label, rich, lines, hint in form:
             value = data.get(key, '')
             if key == 'bullets':
                 value = '\n'.join(value or [])
@@ -1256,7 +1350,7 @@ class SectionCard(Surface):
         self.hovered = active
         self.paint()
         role = 'field' if active else 'surface'
-        for widget in (self.header, self.copy, self.title_label, self.subtitle):
+        for widget in (self.header, self.copy, self.title_label, self.subtitle) + ((self.type_label,) if self.type_label else ()):
             if isinstance(widget, Label):
                 widget.bg_role = role
             else:
@@ -1267,16 +1361,19 @@ class SectionCard(Surface):
             widget.draw()
 
     def get(self):
-        result = {key: field.get() for key, field in self.fields.items()}
-        if 'bullets' in result:
+        result = deepcopy(self.saved_extras)
+        result.update({key: field.get() for key, field in self.fields.items()})
+        if 'bullets' in self.fields:
             result['bullets'] = [line for line in result['bullets'].splitlines() if plain(line).strip()]
         return result
 
     def refresh(self):
         data = self.get()
-        title = plain(data.get(TITLE_KEYS[self.owner.kind], '')) or 'Untitled '+ENTRY_NAMES[self.owner.kind]
+        title_key = self.entry_spec.title_key if self.entry_spec else TITLE_KEYS[self.owner.kind]
+        type_name = self.entry_spec.label.lower() if self.entry_spec else ENTRY_NAMES[self.owner.kind]
+        title = plain(data.get(title_key, '')) or 'Untitled '+type_name
         self.title_label.configure(text=title[:100]+('…' if len(title)>100 else ''))
-        second = next((plain(data[k]) for k in ('meta','company','institution','items','url','description') if data.get(k)), '')
+        second = next((plain(data[k]) for k in ('meta','company','institution','authors','venue','organisation','issuer','role','items','url','description') if data.get(k)), '')
         if not second:
             second = 'Click to edit' if not self.expanded else 'Entry '+str(self.owner.cards.index(self)+1 if self in self.owner.cards else len(self.owner.cards)+1)
         self.subtitle.configure(text=second[:85]+('…' if len(second)>85 else ''))
@@ -1308,16 +1405,34 @@ class SectionCard(Surface):
         ])
 
 class ItemList(Frame):
-    def __init__(self, parent, app, key, items):
+    def __init__(self, parent, app, key, items, layout='auto'):
         super().__init__(parent, app.ui, 'bg')
         self.app, self.key, self.cards = app, key, []
         self.kind = 'custom' if is_custom(key) else key
         self.pack(fill='x')
+        if self.kind=='custom':
+            arrangement = Frame(self,app.ui,'bg')
+            arrangement.pack(fill='x',padx=22,pady=(0,16))
+            row = Frame(arrangement,app.ui,'bg')
+            row.pack(fill='x')
+            Label(row,app.ui,'PDF layout',font='label',fg='muted',bg='bg').pack(side='left',padx=(0,12))
+            self.layout_variable = tk.StringVar(value=ENTRY_LAYOUTS[entry_layout(layout)])
+            self.layout_choice = Choice(row,app,self.layout_variable,list(ENTRY_LAYOUTS.values()),self.layout_changed,width=190)
+            self.layout_choice.bg_role = 'bg'
+            self.layout_choice.pack(side='left')
+            self.layout_hint = Label(arrangement,app.ui,'',font='small',fg='muted',bg='bg',justify='left')
+            self.layout_hint.pack(fill='x',pady=(7,0))
+            self.layout_hint.bind('<Configure>',lambda e:self.layout_hint.configure(wraplength=max(120,e.width)))
+            self.layout_changed(render=False)
         bar = Frame(self, app.ui, 'bg')
         bar.pack(fill='x', padx=20, pady=(0,14))
         self.count = Label(bar, app.ui, '', font='small', fg='muted', bg='bg')
         self.count.pack(side='left')
-        Button(bar, app.ui, '+ Add '+ENTRY_NAMES[self.kind], self.add_new, compact=True, bg='bg').pack(side='right')
+        self.add_button = Button(bar, app.ui, '+ Add entry  ▾' if self.kind=='custom' else '+ Add '+ENTRY_NAMES[self.kind],
+                                 self.add_new, compact=True, bg='bg')
+        self.add_button.pack(side='right')
+        if self.kind=='custom':
+            Tooltip(self.add_button,'Choose an entry type. Different types can share the same section.')
         collapse = Button(bar, app.ui, 'Collapse all', lambda: self.expand_all(False), kind='ghost', compact=True, bg='bg', font='small')
         collapse.pack(side='right', padx=8)
         self.holder = Frame(self, app.ui, 'bg')
@@ -1331,9 +1446,23 @@ class ItemList(Frame):
             widgets=lambda:[(card,card) for card in self.cards],on_layout_end=self.repack,
             describe=lambda card:(card.title_label.cget('text'),card.subtitle.cget('text')))
         self.empty = Label(self.holder, app.ui, 'No entries yet. Add one when you’re ready.', fg='muted', bg='bg', justify='left')
+        if self.kind=='custom':
+            self.empty.configure(text='Choose a type with + Add entry. Mix education, publications, projects, and more in this section.')
+            self.empty.bind('<Configure>',lambda e:self.empty.configure(wraplength=max(120,e.width)))
         for i, item in enumerate(items):
             self.add(item, expanded=(i==0))
         self.repack()
+
+    def get_layout(self):
+        return next((key for key,label in ENTRY_LAYOUTS.items() if label==self.layout_variable.get()), 'auto')
+
+    def layout_changed(self, render=True):
+        hints = {'auto':'Pair similar, compact entries when there is room. ATS stays single-column.',
+                 'single':'Each entry uses the full available width in the PDF.',
+                 'columns':'Pair neighbouring entries in the PDF. Long entries use the full width.'}
+        self.layout_hint.configure(text=hints[self.get_layout()])
+        if render:
+            self.app.changed()
 
     def add(self, data=None, expanded=True):
         data = data or {key: [] if key=='bullets' else '' for key,*_ in FIELDS[self.kind]}
@@ -1343,9 +1472,16 @@ class ItemList(Frame):
         return card
 
     def add_new(self):
-        card = self.add()
+        if self.kind=='custom':
+            return PopupMenu(self.app,self.add_button,
+                [(ENTRY_TYPES[kind].label,'',lambda k=kind:self.create_entry(k)) for kind in ENTRY_CHOICES])
+        return self.create_entry()
+
+    def create_entry(self, kind=None):
+        card = self.add(empty_entry(kind or 'text') if self.kind=='custom' else None)
         self.app.changed()
-        self.app.after_idle(lambda: self.app.reveal_field(next(iter(card.fields.values())), card))
+        self.app.after_idle(lambda: self.app.reveal_field(next(iter(card.fields.values())), card) if card.winfo_exists() else None)
+        return card
 
     def repack(self):
         self.empty.pack_forget()
@@ -1414,49 +1550,45 @@ class Toggle(Button):
         self.draw()
 
 
-class SectionsInspector(Frame):
-    def __init__(self, parent, app, sections):
-        super().__init__(parent, app.ui)
+class SectionState:
+    """Section data shared by sidebar editing, ordering and visibility; no duplicate form."""
+    def __init__(self, app, sections):
         self.app, self.rows = app, []
-        self.pack(fill='x')
         for section in sections:
             self.add(section)
-        self.repack()
 
     def add(self, section):
         app = self.app
-        row = Frame(self, app.ui)
-        visible = tk.BooleanVar(value=section['visible'])
-        title = tk.StringVar(value=section['title'])
-        item = dict(frame=row, key=section['key'], visible=visible, title=title)
-        toggle = Toggle(row, app, visible, 'Show', app.changed)
-        toggle.configure(width=64)
-        toggle.pack(side='left', padx=(0,8))
-        entry = ttk.Entry(row, textvariable=title, width=16, cursor='xterm')
-        entry.pack(side='left', fill='x', expand=True)
-        item['entry'] = entry
-        title.trace_add('write', lambda *_: (app.refresh_section_labels(), app.changed()))
-        visible.trace_add('write', lambda *_: app.refresh_section_labels())
+        visible = tk.BooleanVar(master=app,value=section['visible'])
+        title = tk.StringVar(master=app,value=section['title'])
+        item = dict(key=section['key'], visible=visible, title=title)
+        item['traces'] = [(variable,variable.trace_add('write',self.changed)) for variable in (title,visible)]
         self.rows.append(item)
-        self.repack()
         return item
 
-    def move(self, row, delta):
-        i, j = self.rows.index(row), self.rows.index(row)+delta
-        if 0<=j<len(self.rows):
-            self.rows[i],self.rows[j] = self.rows[j],self.rows[i]
-            self.repack()
-            self.app.refresh_section_labels()
-            self.app.changed()
+    def changed(self, *_):
+        self.app.refresh_section_labels()
+        self.app.changed()
 
-    def repack(self):
-        for row in self.rows:
-            row['frame'].pack_forget()
-        for row in self.rows:
-            row['frame'].pack(fill='x', pady=5)
+    def remove(self, row):
+        for variable,trace in row['traces']:
+            variable.trace_remove('write',trace)
+        self.rows.remove(row)
+
+    def dispose(self):
+        for row in list(self.rows):
+            self.remove(row)
 
     def get(self):
-        return [dict(key=r['key'], title=r['title'].get(), visible=r['visible'].get()) for r in self.rows]
+        sections = []
+        for row in self.rows:
+            section = dict(key=row['key'], title=row['title'].get(), visible=row['visible'].get())
+            if is_custom(row['key']):
+                layout = self.app.lists[row['key']].get_layout()
+                if layout!='auto':
+                    section['entry_layout'] = layout
+            sections.append(section)
+        return sections
 
 
 PDF_LOCK = threading.Lock()
@@ -1541,14 +1673,6 @@ class StudioApp(tk.Tk):
         self.sidebar = Frame(workspace, self.ui, 'rail', width=self.sidebar_width)
         self.sidebar.pack(side='left', fill='y')
         self.sidebar.pack_propagate(False)
-        # Keep creation reachable even when a CV has many custom categories.
-        nav_footer = Frame(self.sidebar, self.ui, 'rail', padx=10, pady=14)
-        nav_footer.pack(side='bottom', fill='x')
-        Frame(nav_footer, self.ui, 'line', height=1).pack(fill='x', padx=8, pady=(0,12))
-        self.add_section_button = Button(nav_footer, self.ui, '+ Add Section', self.add_custom_section,
-                                         anchor='w', bg='rail')
-        self.add_section_button.pack(fill='x')
-        Tooltip(self.add_section_button, 'Create a custom section — awards, certifications, volunteering, and more')
         self.nav_canvas=tk.Canvas(self.sidebar,bd=0,highlightthickness=0,yscrollincrement=1,cursor='arrow')
         self.nav_canvas.scroll_target=self.nav_canvas
         self.nav_scrollbar=ModernScrollbar(self.sidebar,self.ui,command=self.nav_canvas.yview,bg='rail')
@@ -1569,11 +1693,14 @@ class StudioApp(tk.Tk):
             on_layout_end=self.refresh_section_labels,describe=lambda key:(self.nav[key].text,''),
             ghost_painter=lambda canvas,key,width:self.nav[key].paint_drag_preview(canvas,width))
         Label(sidebar, self.ui, 'DOCUMENT', font='label', fg='muted', bg='rail').pack(anchor='w', padx=12, pady=(0,14))
-        self.nav, self.nav_tips = {}, {}
+        self.nav = {}
         for key, title, _ in NAVIGATION:
             if key == 'layout':
                 self.design_separator = Frame(sidebar, self.ui, 'line', height=1)
                 self.design_separator.pack(fill='x', padx=16, pady=(18,14))
+                self.add_section_button = NavigationButton(sidebar, self.ui, '+ Add Section', self.add_custom_section,
+                                                           kind='nav', anchor='w', bg='rail', width=self.sidebar_width-20)
+                self.add_section_button.pack(fill='x', pady=4)
             self.add_navigation(key, title)
         self.sidebar_drop_line = self.sidebar_reorder.marker
         self.sidebar_divider=SidebarDivider(workspace,self)
@@ -1644,7 +1771,6 @@ class StudioApp(tk.Tk):
     def reorder_sections(self, old, new):
         rows = self.sections.rows
         rows.insert(new,rows.pop(old))
-        self.sections.repack()
         if not self.sidebar_reorder.layout:
             self.refresh_section_labels()
         self.changed()
@@ -1655,7 +1781,6 @@ class StudioApp(tk.Tk):
                                   kind='nav', anchor='w', bg='rail', width=self.sidebar_width-20)
         button.pack(fill='x', pady=4)
         self.nav[key] = button
-        self.nav_tips[key] = Tooltip(button, title)
         if key not in ('header','layout'):
             button.reorderable=True
             self.sidebar_reorder.bind(button,key,lambda k=key:self.navigate(k))
@@ -1675,7 +1800,7 @@ class StudioApp(tk.Tk):
             number += 1
         self.add_navigation(key, title)
         self.create_page(key, title, 'Your own space for awards, certifications, volunteering, or anything else.')
-        self.lists[key] = ItemList(self.pages[key].inner, self, key, [{}])
+        self.lists[key] = ItemList(self.pages[key].inner, self, key, [])
         self.sections.add(dict(key=key, title=title, visible=True))
         self.refresh_section_labels()
         self.navigate(key)
@@ -1697,14 +1822,11 @@ class StudioApp(tk.Tk):
             self.navigate('header')
         if self.active_editor and str(self.active_editor).startswith(str(self.pages[key]) + '.'):
             self.active_editor = None
-        self.nav_tips.pop(key).hide()
         self.nav.pop(key).destroy()
         self.pages.pop(key).destroy()
         self.page_titles.pop(key)
         self.lists.pop(key)
-        self.sections.rows.remove(row)
-        row['frame'].destroy()
-        self.sections.repack()
+        self.sections.remove(row)
         self.refresh_section_labels()
         self.changed()
         self.status.set('Custom section removed')
@@ -1713,7 +1835,7 @@ class StudioApp(tk.Tk):
         row = next(r for r in self.sections.rows if r['key']==key)
         visible = row['visible'].get()
         items = [('Rename section…','F2',lambda:self.rename_section(key)),
-                 ('Hide from CV' if visible else 'Show on CV','',lambda:self.toggle_section(key))]
+                 ('✓  Show on CV' if visible else '    Show on CV','',lambda:self.toggle_section(key))]
         if is_custom(key):
             items.extend([None, ('Remove section…', '', lambda:self.remove_custom_section(key))])
         PopupMenu(self,anchor or self.nav[key],items)
@@ -1726,7 +1848,6 @@ class StudioApp(tk.Tk):
             self.section_rename['entry'].focus_set()
             return 'break'
         self.finish_section_rename()
-        self.nav_tips[key].hide()
         self.reveal_sidebar(self.nav[key])
         row = next(r for r in self.sections.rows if r['key']==key)
         button=self.nav[key]
@@ -1779,7 +1900,7 @@ class StudioApp(tk.Tk):
     def toggle_section(self,key):
         row = next(r for r in self.sections.rows if r['key']==key)
         row['visible'].set(not row['visible'].get())
-        self.changed()
+        self.status.set('Section shown on CV' if row['visible'].get() else 'Section hidden from CV · content kept')
 
     def place_split(self, event=None):
         width = self.paned.winfo_width()
@@ -1856,6 +1977,8 @@ class StudioApp(tk.Tk):
         self.finish_section_rename(commit=False)
         data = self.engine.migrate(raw)
         self.loading = True
+        if hasattr(self,'sections'):
+            self.sections.dispose()
         # A scrolled, long navigation canvas can leave its new shorter window
         # completely offscreen. Tk then defers its geometry, so width/wrapping
         # never catches up. Map the top before replacing section widgets.
@@ -1868,11 +1991,12 @@ class StudioApp(tk.Tk):
             widget.destroy()
         for key in list(self.nav):
             if is_custom(key):
-                self.nav_tips.pop(key).hide()
                 self.nav.pop(key).destroy()
-        mode = data['settings'].get('ui_mode','Light')
-        self.v_ui_mode = tk.StringVar(value=mode if mode in PALETTES else 'Light')
-        self.ui.apply(self.v_ui_mode.get())
+        mode = data['settings'].get('ui_mode',DEFAULT_UI_MODE)
+        self.v_ui_mode = tk.StringVar(value=mode if mode in PALETTES else DEFAULT_UI_MODE)
+        self.v_button_theme = tk.StringVar(value=normalize_ui_theme(data['settings'].get('ui_theme')))
+        self.v_ui_style = tk.StringVar(value=normalize_ui_style(data['settings'].get('ui_style')))
+        self.ui.apply(self.v_ui_mode.get(),self.v_button_theme.get(),self.v_ui_style.get())
         self.pages, self.lists, self.fields, self.page_titles = {}, {}, {}, {}
         for key,title,description in NAVIGATION:
             self.create_page(key, title, description)
@@ -1881,7 +2005,7 @@ class StudioApp(tk.Tk):
             if is_custom(key):
                 self.add_navigation(key, section['title'])
                 self.create_page(key, section['title'], 'Your own space for awards, certifications, volunteering, or anything else.')
-                self.lists[key] = ItemList(self.pages[key].inner,self,key,data['custom_sections'][key])
+                self.lists[key] = ItemList(self.pages[key].inner,self,key,data['custom_sections'][key],section.get('entry_layout','auto'))
         group = InspectorGroup(self.pages['header'].inner,self,'Personal details')
         for key,label in [('name','Full name'),('role','Professional headline')]:
             self.fields[('personal',key)] = RichTextEditor(group,self,label,data['personal'][key],False,1)
@@ -1891,6 +2015,7 @@ class StudioApp(tk.Tk):
                                                   'Aim for a focused summary of roughly 60–100 words.',reorder_lines=True)
         for key in ('projects','skills','experience','education'):
             self.lists[key] = ItemList(self.pages[key].inner,self,key,data[key])
+        self.sections = SectionState(self,data['settings']['sections'])
         self.build_settings(data['settings'])
         self.refresh_section_labels()
         self.navigate(self.current_section if self.current_section in self.pages else 'header')
@@ -1932,6 +2057,23 @@ class StudioApp(tk.Tk):
             b.draw()
             b.pack(side='left',padx=(0,8))
             self.mode_buttons[mode] = b
+        Label(group,self.ui,'Interface style',font='label').pack(anchor='w',pady=(18,8))
+        self.ui_style_choice = Choice(group,self,self.v_ui_style,list(UI_STYLES),
+                                      lambda:self.set_ui_style(self.v_ui_style.get()),width=150)
+        self.ui_style_choice.pack(anchor='w',pady=(0,6))
+        style_hint = Label(group,self.ui,'Minimal keeps the workspace quiet. Vibrant uses colourful buttons and category cards.',
+                           font='small',fg='muted',justify='left')
+        style_hint.pack(fill='x',pady=(4,0))
+        style_hint.bind('<Configure>',lambda e,w=style_hint:w.configure(wraplength=max(120,e.width)))
+        self.button_theme_label = Label(group,self.ui,'Button theme',font='label')
+        self.button_theme_choice = Choice(group,self,self.v_button_theme,list(BUTTON_THEMES),
+                                          lambda:self.set_button_theme(self.v_button_theme.get()),
+                                          width=None,compact=True,fit_menu=True,font='small')
+        self.button_theme_choice.configure(height=max(28,self.button_theme_choice.font.metrics('linespace')+2))
+        self.button_theme_hint = Label(group,self.ui,'Styles buttons, menus and selection highlights. Your PDF colours stay unchanged.',
+                                       font='small',fg='muted',justify='left')
+        self.button_theme_hint.bind('<Configure>',lambda e,w=self.button_theme_hint:w.configure(wraplength=max(120,e.width)))
+        self.sync_button_theme_controls()
         group = InspectorGroup(host,self,'Document style','Colour and typography for the exported PDF.')
         self.v_template = tk.StringVar(value=settings.get('template',DEFAULT_TEMPLATE))
         self.v_photo = tk.StringVar(value=settings.get('photo',''))
@@ -1988,8 +2130,6 @@ class StudioApp(tk.Tk):
         hint = Label(group,self.ui,'Gently reduces text size when the CV needs more space.',font='small',fg='muted',justify='left')
         hint.pack(fill='x',pady=(6,0))
         hint.bind('<Configure>',lambda e:hint.configure(wraplength=max(120,e.width)))
-        group = InspectorGroup(host,self,'Sections','Rename headings or toggle visibility. Drag sections in the Document sidebar to reorder.')
-        self.sections = SectionsInspector(group,self,settings['sections'])
         self.template_changed(render=False)
 
     def template_changed(self, render=True):
@@ -2069,7 +2209,6 @@ class StudioApp(tk.Tk):
                 button.text = label
                 button.hidden = not row['visible'].get()
                 button.draw()
-                self.nav_tips[key].text = title+(' · Hidden from CV' if button.hidden else '')+'\nDouble-click to rename · Drag to reorder · Right-click for options'
             if key in self.page_titles:
                 self.page_titles[key].configure(text=title.title() if title.isupper() else title)
         for row in self.sections.rows:
@@ -2086,6 +2225,32 @@ class StudioApp(tk.Tk):
             b.draw()
         self.refresh_photo_controls()
         self.changed(render=False)
+
+    def set_button_theme(self, theme):
+        theme = normalize_ui_theme(theme)
+        self.v_button_theme.set(theme)
+        self.ui.apply(self.v_ui_mode.get(),theme)
+        self.refresh_photo_controls()
+        self.changed(render=False)
+        self.status.set(theme+' button theme · PDF colours unchanged')
+
+    def set_ui_style(self, style):
+        style = normalize_ui_style(style)
+        self.v_ui_style.set(style)
+        self.ui.apply(self.v_ui_mode.get(),self.v_button_theme.get(),style)
+        self.sync_button_theme_controls()
+        self.refresh_photo_controls()
+        self.changed(render=False)
+        self.status.set(style+' interface style · PDF colours unchanged')
+
+    def sync_button_theme_controls(self):
+        if self.v_ui_style.get() == 'Vibrant':
+            self.button_theme_label.pack(anchor='w',pady=(18,8))
+            self.button_theme_choice.pack(anchor='w',pady=(0,6))
+            self.button_theme_hint.pack(fill='x',pady=(4,0))
+        else:
+            for widget in (self.button_theme_label,self.button_theme_choice,self.button_theme_hint):
+                widget.pack_forget()
 
     def scale_changed(self, value=None):
         self.scale_label.configure(text=f'{self.v_scale.get():.0f}%')
@@ -2106,7 +2271,8 @@ class StudioApp(tk.Tk):
                     profile=self.fields[('profile',)].get())
         data.update({key:items.get_items() for key,items in self.lists.items() if not is_custom(key)})
         data['custom_sections'] = {key:items.get_items() for key,items in self.lists.items() if is_custom(key)}
-        data['settings'] = dict(theme=self.v_theme.get(),ui_mode=self.v_ui_mode.get(),
+        data['settings'] = dict(theme=self.v_theme.get(),ui_mode=self.v_ui_mode.get(),ui_theme=self.v_button_theme.get(),
+                                ui_style=self.v_ui_style.get(),
                                 sidebar_width=self.sidebar_width,
                                 template=self.v_template.get(),photo=self.v_photo.get(),
                                 photo_crop=dict(self.photo_crop),
@@ -2345,6 +2511,8 @@ class StudioApp(tk.Tk):
         current, rendered = self.collect(), deepcopy(getattr(self,'rendered_data',None))
         if rendered:
             rendered['settings']['ui_mode'] = current['settings']['ui_mode']
+            rendered['settings']['ui_theme'] = current['settings']['ui_theme']
+            rendered['settings']['ui_style'] = current['settings']['ui_style']
             rendered['settings']['sidebar_width'] = current['settings']['sidebar_width']
         if not self._pdf or current!=rendered or self._displayed_pdf!=self._pdf:
             self.status.set('The preview is updating. Try again in a moment.')
@@ -2356,10 +2524,7 @@ class StudioApp(tk.Tk):
         source = region['source']
         field = card = None
         if source[0]=='section':
-            self.navigate('layout')
-            row = next(r for r in self.sections.rows if r['key']==source[1])
-            self.pages['layout'].reveal(row['frame'])
-            row['entry'].focus_set()
+            self.rename_section(source[1])
             return
         if source[0]=='personal':
             self.navigate('header')
@@ -2551,7 +2716,8 @@ class StudioApp(tk.Tk):
             'Ctrl+B    Bold\nCtrl+I      Italic\nCtrl+K    Insert or edit link\nCtrl+Z / Ctrl+Y    Undo / redo\n\n'
             'Ctrl+S    Save\nCtrl+Shift+S    Save as\nCtrl+O    Open\nCtrl+E    Export PDF\n\n'
             '+ Add Section creates a custom category. Name it in the sidebar; Enter saves, Esc cancels. '
-            'Drag to reorder, double-click or press F2 to rename. Section options offers hide/remove.\n\n'
+            'Drag to reorder, double-click or press F2 to rename. Right-click a category and toggle Show on CV to hide/show it without deleting content.\n\n'
+            'Design → Workspace offers light/dark mode and button themes; PDF colours are separate.\n\n'
             'Double-click PDF text to jump to its field.\nDouble-click a Document sidebar section to rename it. Drag to reorder; right-click for options.\n'
             'Use each entry’s … menu to move, duplicate, or remove it.\n'
             'Hold Shift while scrolling to move horizontally in the preview.')
@@ -2571,6 +2737,8 @@ class StudioApp(tk.Tk):
         if getattr(self,'active_drag',None):
             self.active_drag.cancel()
         self.closing = True
+        if hasattr(self,'sections'):
+            self.sections.dispose()
         for job in self.tk.splitlist(self.tk.call('after','info')):
             self.after_cancel(job)
         self.executor.shutdown(wait=False,cancel_futures=True)

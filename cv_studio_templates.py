@@ -4,7 +4,8 @@ The existing CVBuilder owns text conversion, styles, links and source regions.
 Templates only decide how those same flowables are arranged and styled.
 """
 import io
-from dataclasses import dataclass
+import re
+from dataclasses import dataclass, replace
 
 from reportlab.lib import colors
 from reportlab.lib.enums import TA_CENTER, TA_LEFT
@@ -15,7 +16,8 @@ from reportlab.pdfbase.pdfmetrics import stringWidth
 from reportlab.platypus import Flowable, HRFlowable, Image, SimpleDocTemplate, Spacer, Table, TableStyle
 
 from cv_studio_pdf import SourceParagraph
-from cv_studio_richtext import plain
+from cv_studio_richtext import plain, parse, serialize, normalize_url
+from cv_studio_sections import ENTRY_TYPES, entry_type, entry_layout
 from cv_studio_photo import crop_image, decode_photo
 
 
@@ -254,28 +256,135 @@ def _heading(builder,key,title,template):
     return builder.heading(title,key)
 
 
+def _entry_link(value, mode):
+    """Link bare DOI/email/website fields without losing visual formatting."""
+    text, attrs = parse(value)
+    label = text.strip()
+    if not label or any(a.link or a.no_link for a in attrs):
+        return value
+    target = ''
+    doi = re.fullmatch(r'(?:doi:\s*)?(10\.\d{4,9}/\S+)', label, re.I)
+    if mode == 'phone':
+        number = re.sub(r'[^\d+]', '', label)
+        if re.fullmatch(r'[+\d() .-]+', label) and len(re.sub(r'\D','',number)) >= 5:
+            target = 'tel:' + number
+    elif doi:
+        target = 'https://doi.org/' + doi.group(1)
+    elif re.fullmatch(r'[^\s<>]+\.[^\s<>]+', label):
+        target = normalize_url(label)
+    return serialize(text, [replace(a, link=target) for a in attrs]) if target else value
+
+
+class CompactEntryPair(Flowable):
+    """Two source-aware entries measured against the actual containing column.
+
+    Short pairs stay together; long/narrow pairs fall back to a splittable,
+    full-width stack. Neither text nor PDF links are flattened into images.
+    """
+    def __init__(self, left, right, builder):
+        super().__init__()
+        self.entries = (left, right)
+        self.gutter = 20 * builder.k
+        self.min_column = 46 * mm * builder.k
+        page_height = A4[1] - 2 * builder.d['settings']['margin_mm'] * mm - 12
+        self.max_height = min(190 * builder.k, page_height * .28)
+        self.color = builder.C['line']
+        self.gap = 7 * builder.af
+        self.table = None
+
+    @staticmethod
+    def _plain_table(rows, widths, split=True):
+        table = Table(rows, colWidths=widths, hAlign='LEFT', splitInRow=int(split))
+        table.setStyle(TableStyle([
+            ('VALIGN',(0,0),(-1,-1),'TOP'),
+            ('LEFTPADDING',(0,0),(-1,-1),0),('RIGHTPADDING',(0,0),(-1,-1),0),
+            ('TOPPADDING',(0,0),(-1,-1),0),('BOTTOMPADDING',(0,0),(-1,-1),0),
+        ]))
+        return table
+
+    def wrap(self, availWidth, availHeight):
+        # Table cells may measure/split their contents without a bound canvas.
+        canvas = getattr(self,'canv',None)
+        column = (availWidth-self.gutter)/2
+        compact = column >= self.min_column
+        if compact:
+            heights = [self._plain_table([[entry]], [column]).wrapOn(canvas,column,1e6)[1]
+                       for entry in self.entries]
+            # Do not create tall, cramped columns, or pairs that cost more
+            # height than simply stacking their original full-width content.
+            full_heights = [self._plain_table([[entry]], [availWidth]).wrapOn(canvas,availWidth,1e6)[1]
+                            for entry in self.entries]
+            compact = max(heights) <= self.max_height and max(heights) < sum(full_heights)+self.gap
+        if compact:
+            self.table = self._plain_table([[self.entries[0],self.entries[1]]], [availWidth/2]*2, split=False)
+            self.table.setStyle(TableStyle([
+                ('RIGHTPADDING',(0,0),(0,0),self.gutter/2),
+                ('LEFTPADDING',(1,0),(1,0),self.gutter/2),
+                ('LINEAFTER',(0,0),(0,0),.35,self.color),
+            ]))
+        else:
+            self.table = self._plain_table([[entry] for entry in self.entries], [availWidth])
+            self.table.setStyle(TableStyle([('BOTTOMPADDING',(0,0),(0,0),self.gap)]))
+        self.width, self.height = self.table.wrapOn(canvas,availWidth,availHeight)
+        return self.width, self.height
+
+    def split(self, availWidth, availHeight):
+        # ReportLab's parent Table passes its unpadded cell width to split(),
+        # after wrapping at the narrower content width. Keep that measured
+        # width, or continuation tables would expand into the right gutter.
+        if self.table is not None:
+            availWidth = min(availWidth,self.width)
+        self.wrap(availWidth,availHeight)
+        return self.table.splitOn(getattr(self,'canv',None),availWidth,availHeight)
+
+    def draw(self):
+        self.table.drawOn(self.canv,0,0)
+
+
 def custom_section(builder, key, title, template=None):
     """Shared flowing custom content for both classic and alternate layouts."""
-    out = []
+    entries = []
     for i, item in enumerate(builder.d.get('custom_sections', {}).get(key, [])):
-        content = [(item.get('title', ''), 'project', (key, i, 'title'), ''),
-                   (item.get('meta', ''), 'meta', (key, i, 'meta'), '')]
-        content.extend((line, 'body', (key, i, 'description', n), '')
-                       for n, line in enumerate(item.get('description', '').splitlines()))
-        content.extend((line, 'bullet', (key, i, 'bullets', n), '• ')
-                       for n, line in enumerate(item.get('bullets', [])))
-        paragraphs = [builder.para(text, builder.S[style], source=source, prefix=prefix)
-                      for text, style, source, prefix in content if plain(text).strip()]
+        spec = ENTRY_TYPES[entry_type(item)]
+        paragraphs, identities = [], []
+        for field in spec.fields:
+            value = item.get(field.key) or ([] if field.mode=='bullets' else '')
+            if field.mode in ('link','phone'):
+                value = _entry_link(value, field.mode)
+            lines = value if field.mode=='bullets' else value.splitlines() if field.mode=='paragraphs' else [value]
+            for n, line in enumerate(lines):
+                if not plain(line).strip():
+                    continue
+                source = (key, i, field.key) + ((n,) if field.mode in ('paragraphs','bullets') else ())
+                prefix = field.prefix if field.mode!='paragraphs' or n==0 else ''
+                paragraphs.append(builder.para(line, builder.S[field.style], source=source, prefix=prefix))
+                identities.append(field.mode not in ('paragraphs','bullets'))
         if not paragraphs:
             continue
-        if not out:
-            out.append(_heading(builder, key, title, template) if template else builder.heading(title, key))
-        for paragraph in paragraphs[:-1]:
-            if paragraph.source[-1] not in ('title', 'meta') or len(paragraph.getPlainText()) >= 220:
+        for paragraph, identity in zip(paragraphs[:-1], identities):
+            if not identity or len(paragraph.getPlainText()) >= 220:
                 break
             paragraph.keepWithNext = True
         paragraphs[-1].keepWithNext = False
-        out.extend(paragraphs)
+        entries.append((entry_type(item), paragraphs))
+    if not entries:
+        return []
+    section = next((s for s in builder.d['settings']['sections'] if s['key']==key), {})
+    layout = entry_layout(section.get('entry_layout'))
+    if layout=='auto' and template and template.layout=='minimal':
+        layout = 'single'
+    out = [_heading(builder, key, title, template) if template else builder.heading(title, key)]
+    index = 0
+    while index < len(entries):
+        kind, paragraphs = entries[index]
+        pair = index+1 < len(entries) and (layout=='columns' or
+                (layout=='auto' and ENTRY_TYPES[kind].compact and entries[index+1][0]==kind))
+        if pair:
+            out.append(CompactEntryPair(paragraphs,entries[index+1][1],builder))
+            index += 2
+        else:
+            out.extend(paragraphs)
+            index += 1
         out.append(builder.sp(template.gap if template else 6))
     return out
 

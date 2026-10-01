@@ -1,15 +1,80 @@
-# CV Studio — Generic edition
+# CV Studio
 
-Run `CV_Studio_Generic.py` to open the editor with a placeholder CV anyone can personalise.
+A desktop CV editor with visual rich text, live PDF preview, six layouts, photo cropping, and reusable custom sections. The starter document contains placeholders, not personal CV data.
 
-From this folder:
+## Install and run
+
+Use **Python 3.10 or newer with Tkinter** on a Windows, macOS, or Linux desktop. Download/clone the whole repository, then open a terminal in its folder. Keep all `cv_studio_*.py` modules beside `CV_Studio_Generic.py`, including `cv_studio_appearance.py`; no sibling application or parent folder is required.
+
+### Windows
+
+Install Python with Tcl/Tk support, then run:
 
 ```powershell
-python .\CV_Studio_Generic.py
+py -m venv .venv
+.venv\Scripts\python.exe -m pip install -r requirements.txt
+.venv\Scripts\python.exe CV_Studio_Generic.py
 ```
 
-This folder is self-contained and can be shared on its own. Keep all seven `cv_studio_*.py` support files beside the launcher. It does not depend on the Personal edition or the parent folder.
+If `py` is unavailable, use your Python installation's `python` command for the first line. No virtual-environment activation or PowerShell execution-policy change is needed.
 
-Requirements: Python, `reportlab`, `pymupdf` for live preview, and `Pillow` for photo editing. The existing Python environment already has these installed.
+### macOS / Linux
 
-`CV_Studio_Generic_BACKUP.py` is the unchanged pre-overhaul backup, not the current launcher. Existing JSON files can be opened using File → Open.
+```sh
+python3 -m venv .venv
+.venv/bin/python -m pip install -r requirements.txt
+.venv/bin/python CV_Studio_Generic.py
+```
+
+Check Tk support with `python3 -m tkinter`. On Debian/Ubuntu, install the matching `python3-tk` and `python3-venv` system packages if needed. Other distributions and Homebrew Python require the Tk package matching their Python installation; the python.org macOS installer is another option. Tkinter is **not** installed with pip.
+
+A graphical desktop/display is required; this is not a browser app. Headless GUI tests require a virtual display.
+
+PDF fonts are discovered relative to the application and in platform font folders. ReportLab's bundled Bitstream Vera family is the fallback, so fonts from the author's computer are not required. Optionally put `DejaVuSans.ttf`, `DejaVuSans-Bold.ttf`, `DejaVuSans-Oblique.ttf`, and `DejaVuSans-BoldOblique.ttf` in a `fonts/` directory beside the launcher.
+
+## Flexible custom sections
+
+1. Choose **+ Add Section** in the Document sidebar and name it in place.
+2. Choose **+ Add entry ▾** and select **Education, Publication, Project, Experience, Referee / Reference, Certification, Award, Skills, Bullet List, or Free Text**.
+3. Mix any of these types in the same section. Each card shows its type and the relevant fields; empty optional fields are omitted from the PDF.
+
+Publication entries accept bare DOIs or links. References support email and phone links. Rich fields support combined bold/italic, labelled links, and clear formatting. Drag card headers or use the **…** menu to reorder, duplicate, or remove entries. Existing untyped custom entries retain their original title/details/content/bullets form.
+
+Double-click a section name to rename it; drag the row to reorder it. **Right-click a category → Show on CV** toggles its visibility: a checkmark means it is included. Hidden categories remain editable in the sidebar and retain all their content; toggling the option again restores them to preview/export. Section titles, visibility, entry types, and order are saved in JSON. Built-in categories retain their existing forms. Contact and Design are fixed navigation pages, not hideable document categories.
+
+### Side-by-side entries
+
+Each custom section has a **PDF layout** selector above its entries:
+
+- **Automatic** pairs consecutive short entries of the same type: references, certifications, awards, skills, or education. For example, two referees appear side by side, with a subtle divider. The Minimal / ATS-friendly template stays single-column in this mode.
+- **Single column** keeps every entry full-width.
+- **Two columns** requests pairs of neighbouring entries, including projects, publications, and other types. This explicitly overrides the ATS template's single-column default for that section.
+
+Pairs are measured against the actual space available in the chosen template. Long entries, narrow columns, or pairs that would waste vertical space fall back to a full-width stack. An unpaired final entry uses the full width. Reading order remains left-to-right, then top-to-bottom, following the editor's existing order; entries are never regrouped across other content. This controls PDF preview/export, not the editor card layout. The setting is saved with the section, and links and double-click navigation work in either column.
+
+## Editing and export
+
+- **Ctrl+B / Ctrl+I / Ctrl+K**: bold, italic, and links in rich-text fields.
+- **Ctrl+S / Ctrl+Shift+S / Ctrl+O**: save, save as, and open CV data.
+- **Ctrl+E**: export PDF. Double-click preview text to reveal its editor field; double-click a section heading to rename it directly in the sidebar.
+- **Design → Workspace → Interface style**: New CVs open in Dark mode with Minimal style, using flat controls, neutral surfaces, and quiet section buttons. Select Vibrant for the previous colourful, raised design. Older documents saved with the name Original open as Vibrant. Sidebar categories no longer show hover popups.
+- **Design → Workspace → Button theme** appears only with Vibrant selected: Ocean, Teal, Forest, Violet, Rose, or Graphite. These colours work in light and dark mode, update immediately without recreating editors or rebuilding the PDF, and are saved as `settings.ui_theme`. Minimal keeps neutral controls regardless of this saved setting.
+- **Design** also contains PDF layout, PDF colour theme, text scale, margins, and AutoFit. The PDF colour theme, document layout and workspace button theme are independent. Section management lives in the sidebar, not a duplicate Design panel.
+- **Creative / Photo CV**: upload PNG/JPEG, crop/zoom/reposition, replace, or remove a portrait. Images and crop settings are embedded in JSON, not saved as machine-specific source paths.
+
+The application can be launched from any working directory. Save/open/export locations are chosen through file dialogs; JSON files can be moved to another computer. Legacy CV JSON files remain readable. Keep private CV data outside the source repository; the included ignore rules cover PDF exports and files named `my_cv*.json`, not every possible JSON filename.
+
+## Tests
+
+Use the virtual environment's Python for these commands:
+
+```sh
+python -m unittest discover -s tests -v
+python tests/test_entries.py --gui
+python tests/test_entry_layouts.py --gui
+python tests/test_appearance.py --gui
+```
+
+The unit suite checks mixed-entry migration, compact layout geometry, ordering, all PDF layouts, long content, links, source locations, theme text contrast, PDF independence from workspace colours, and a relocated copy with bundled fonts. The optional GUI suites open a window to check themes, sidebar visibility, pickers, fields, focus, rich text, reordering, two-column preview navigation, save/reopen, and export. Add `--screenshots` to write review images into the ignored `test_artifacts/` directory.
+
+The native GUI has been exercised on Windows. Paths and platform-specific operations are portable, but native macOS/Linux GUI testing is still recommended; those operating systems have not been validated in this workspace.
