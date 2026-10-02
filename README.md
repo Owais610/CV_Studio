@@ -4,8 +4,9 @@ A desktop CV editor with visual rich text, live PDF preview, six layouts, photo 
 
 ## Windows app
 
-[**Download CV Studio for Windows**](https://github.com/Owais610/CV_Studio/releases/latest)
-— get `CV Studio-Windows.zip`, extract it, and double-click `CV Studio.exe`.
+[**Download CV Studio for Windows**](https://github.com/Owais610/CV_Studio/releases/latest/download/CV.Studio-Windows.zip)
+— extract the ZIP and double-click `CV Studio.exe`.
+[Release notes and other downloads](https://github.com/Owais610/CV_Studio/releases/latest).
 Releases also include `SHA256SUMS.txt` to verify downloaded files.
 
 The Generic edition can run as a standalone **CV Studio.exe**. Double-click it to
