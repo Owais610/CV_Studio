@@ -17,7 +17,10 @@ import unittest
 from unittest.mock import patch
 
 ROOT = Path(__file__).resolve().parents[1]
+sys.path.insert(0, str(Path(__file__).resolve().parent))
 sys.path.insert(0, str(ROOT))
+from gui_support import save_screenshot
+
 ENGINE_NAME = 'CV_Studio_Generic'
 engine = importlib.import_module(ENGINE_NAME)
 from cv_studio_sections import ENTRY_CHOICES, ENTRY_TYPES, empty_entry, entry_type, normalize_entry
@@ -217,15 +220,8 @@ def gui_checks(screenshots=False):
     app.focus_force()
 
     def capture(name):
-        if not screenshots:
-            return
-        from PIL import ImageGrab
-        output = ROOT/'test_artifacts'
-        output.mkdir(exist_ok=True)
-        start = time.monotonic()
-        settle(app,lambda:time.monotonic()-start>.3)
-        x,y = app.winfo_rootx(),app.winfo_rooty()
-        ImageGrab.grab(bbox=(x,y,x+app.winfo_width(),y+app.winfo_height())).save(output/(name+'.png'))
+        if screenshots:
+            save_screenshot(app, ROOT/'test_artifacts'/(name+'.png'), settle)
 
     def preview_ready():
         return getattr(app,'rendered_data',None)==app.collect() and app.raster_future is None and bool(app._preview_pages) and app._displayed_pdf==app._pdf

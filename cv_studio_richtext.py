@@ -19,7 +19,7 @@ class Format:
 NORMAL = Format()
 TOKEN = re.compile(r'<(/?)(b|strong|i|em|a|link)\b([^>]*)>|<br\s*/?>', re.I)
 HREF = re.compile(r'''href\s*=\s*(["'])(.*?)\1''', re.I)
-MD_LINK = re.compile(r'\[([^\]\n]+)\]\(([^\s]+?)\)')
+MD_LINK = re.compile(r'\[([^\]\n]+)\]\(')
 URL = re.compile(r'https?://[^\s<>]+')
 
 
@@ -32,6 +32,41 @@ def normalize_url(value):
     if re.match(r'^[^@\s]+@[^@\s]+\.[^@\s]+$', value):
         return 'mailto:' + value
     return 'https://' + value
+
+
+def markdown_link(value, start):
+    """Read a Markdown link without truncating parentheses inside its URL."""
+    match = MD_LINK.match(value, start)
+    if not match:
+        return None
+    target_start, depth = match.end(), 0
+    for end in range(target_start, len(value)):
+        char = value[end]
+        if char.isspace():
+            return None
+        if char == '(':
+            depth += 1
+        elif char == ')':
+            if depth == 0:
+                if end == target_start:
+                    return None
+                return match.group(1), value[target_start:end], end + 1
+            depth -= 1
+    return None
+
+
+def url_end(value, start, end):
+    """Strip prose punctuation while retaining balanced URL brackets."""
+    pairs = {')': '(', ']': '[', '}': '{'}
+    while end > start:
+        char = value[end - 1]
+        if char in '.,;:!?':
+            end -= 1
+        elif char in pairs and value[start:end].count(char) > value[start:end].count(pairs[char]):
+            end -= 1
+        else:
+            break
+    return end
 
 
 def parse(value):
@@ -76,10 +111,11 @@ def parse(value):
                     scan(s[tag.end():closing.start()], new)
                     pos = closing.end()
                     continue
-            link = MD_LINK.match(s, pos)
+            link = markdown_link(s, pos) if s[pos] == '[' else None
             if link:
-                scan(link.group(1), Format(state.bold, state.italic, normalize_url(link.group(2))))
-                pos = link.end()
+                label, target, end = link
+                scan(label, Format(state.bold, state.italic, normalize_url(target)))
+                pos = end
                 continue
             if s[pos] == '*':
                 count = min(3, len(s[pos:]) - len(s[pos:].lstrip('*')))
@@ -104,9 +140,7 @@ def parse(value):
     attrs = [NORMAL if ch == '\n' else state for ch, state in zip(visible, attrs)]
     # Bare URLs retain their full visible label and become clickable automatically.
     for match in URL.finditer(visible):
-        end = match.end()
-        while end > match.start() and visible[end - 1] in '.,;:!?)':
-            end -= 1
+        end = url_end(visible, match.start(), match.end())
         url = visible[match.start():end]
         for i in range(match.start(), end):
             old = attrs[i]

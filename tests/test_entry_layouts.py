@@ -4,7 +4,6 @@ import json
 from pathlib import Path
 import sys
 import tempfile
-import time
 import traceback
 from types import SimpleNamespace
 import unittest
@@ -12,6 +11,7 @@ from unittest.mock import patch
 
 sys.path.insert(0,str(Path(__file__).resolve().parent))
 from test_entries import engine, document, KEY, ROOT, settle
+from gui_support import save_screenshot
 from cv_studio_sections import ENTRY_TYPES, empty_entry
 from cv_studio_templates import CompactEntryPair
 from reportlab.pdfgen.canvas import Canvas
@@ -168,13 +168,7 @@ def gui_checks(screenshots=False):
 
     def capture(name):
         if screenshots:
-            from PIL import ImageGrab
-            output = ROOT/'test_artifacts'
-            output.mkdir(exist_ok=True)
-            start = time.monotonic()
-            settle(app,lambda:time.monotonic()-start>.3)
-            x,y = app.winfo_rootx(),app.winfo_rooty()
-            ImageGrab.grab(bbox=(x,y,x+app.winfo_width(),y+app.winfo_height())).save(output/(name+'.png'))
+            save_screenshot(app, ROOT/'test_artifacts'/(name+'.png'), settle)
 
     try:
         data = engine.migrate(engine.DEFAULT_DATA)

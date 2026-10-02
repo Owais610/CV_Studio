@@ -8,14 +8,14 @@ import re
 from dataclasses import dataclass, replace
 
 from reportlab.lib import colors
-from reportlab.lib.enums import TA_CENTER, TA_LEFT
+from reportlab.lib.enums import TA_CENTER, TA_JUSTIFY, TA_LEFT
 from reportlab.lib.pagesizes import A4
 from reportlab.lib.styles import ParagraphStyle
 from reportlab.lib.units import mm
 from reportlab.pdfbase.pdfmetrics import stringWidth
 from reportlab.platypus import Flowable, HRFlowable, Image, SimpleDocTemplate, Spacer, Table, TableStyle
 
-from cv_studio_pdf import SourceParagraph
+from cv_studio_pdf import SourceParagraph, contact_block
 from cv_studio_richtext import plain, parse, serialize, normalize_url
 from cv_studio_sections import ENTRY_TYPES, entry_type, entry_layout
 from cv_studio_photo import crop_image, decode_photo
@@ -38,9 +38,9 @@ TEMPLATES = {
                  layout='minimal',side_margin=19,gap=7),
         Template('Executive', 'A confident colour masthead, editorial section labels and structured experience.',
                  layout='executive',side_margin=17,gap=8),
-        Template('Two-Column', 'A numbered section rail, delicate separators and a generous main column.',
+        Template('Two-Column', 'A clear section rail, delicate separators and a generous main column.',
                  layout='rail',side_margin=13,gap=6),
-        Template('Academic / Research', 'Serif typography, a centered masthead and numbered research entries.',
+        Template('Academic / Research', 'Serif typography, a centered masthead and research entries.',
                  layout='academic',side_margin=18,gap=7),
         Template('Creative / Photo CV', 'A tailored portrait sidebar, timeline details and bold typographic hierarchy.',
                  layout='photo_rail',side_margin=12,gap=7,photo=True),
@@ -141,7 +141,8 @@ def _styles(builder, template):
                                    textColor=colors.HexColor(heading_color),
                                    spaceBefore=14*k, spaceAfter=9*k, keepWithNext=1)
     for key in ('body','small','bullet','skilltext'):
-        s[key] = ParagraphStyle(mode+'_'+key,parent=s[key],alignment=TA_LEFT,
+        s[key] = ParagraphStyle(mode+'_'+key,parent=s[key],alignment=TA_LEFT if key=='skilltext' else TA_JUSTIFY,
+                                justifyLastLine=0,
                                 fontSize=(8.6 if key in ('body','bullet') else 8.2)*k,
                                 leading=(12.2 if key in ('body','bullet') else 11.6)*k,
                                 spaceAfter=3*k)
@@ -162,6 +163,77 @@ def _styles(builder, template):
         s['small'] = ParagraphStyle('academic_small',parent=s['small'],fontSize=9.4*k,leading=13*k)
         s['bullet'] = ParagraphStyle('academic_bullet',parent=s['bullet'],fontSize=9.4*k,leading=13*k)
         s['meta'] = ParagraphStyle('academic_meta',parent=s['meta'],fontName='Times-Italic',fontSize=9*k,leading=12*k)
+    builder.adjust_spacing()
+
+
+class FlowingRailTable(Table):
+    """Keep the established rail geometry while honoring paragraph attachment.
+
+    A normal Table ignores keepWithNext when it splits a list inside a cell.
+    Cut each cell at paragraph boundaries ourselves, then let the unchanged
+    Table styles draw both fragments. Long paragraphs can still use the space
+    available on the current page.
+    """
+    def setStyle(self, style):
+        self._rail_style = style
+        super().setStyle(style)
+
+    def _fragment(self, cells):
+        table = FlowingRailTable([cells],colWidths=self._colWidths,hAlign=self.hAlign,
+                                 splitInRow=1)
+        table.setStyle(self._rail_style)
+        return table
+
+    def _cut_cell(self, value, width, style, height):
+        flows = list(value) if isinstance(value,(tuple,list)) else [value]
+        chosen, index = [], 0
+        canvas = getattr(self,'canv',None)
+        inner_width = width-style.leftPadding-style.rightPadding
+
+        def measured(items):
+            return self._listCellGeom(items,width,style)[1] if items else 0
+
+        while index<len(flows):
+            end = index
+            while end+1<len(flows) and flows[end].getKeepWithNext():
+                end += 1
+            group = flows[index:end+1]
+            # Match the document frame's numerical tolerance. A larger
+            # allowance can produce a fragment the frame refuses to place.
+            if measured(chosen+group)<=height+1e-6:
+                chosen.extend(group)
+                index = end+1
+                continue
+            prefix, last = chosen+group[:-1],group[-1]
+            extra = prefix[-1].getSpaceAfter()+last.getSpaceBefore() if prefix else 0
+            available = height-measured(prefix)-extra
+            fragments = last.splitOn(canvas,inner_width,max(0,available)) if available>0 else []
+            if fragments and measured(prefix+fragments[:1])<=height+1e-6:
+                return prefix+fragments[:1],fragments[1:]+flows[end+1:]
+            return chosen,flows[index:]
+        return chosen,[]
+
+    def split(self, availWidth, availHeight):
+        # Every instance contains one row, including its continuations.
+        cells, rest = [],[]
+        for column,value in enumerate(self._cellvalues[0]):
+            style = self._cellStyles[0][column]
+            first,later = self._cut_cell(value,self._colWidths[column],style,
+                                         availHeight-style.topPadding-style.bottomPadding)
+            cells.append(first)
+            rest.append(later)
+        # The main column must begin with real content, not a detached rail
+        # heading or a trailing entry spacer on an otherwise empty page.
+        main = self._cellvalues[0][1]
+        main_flows = list(main) if isinstance(main,(tuple,list)) else [main]
+        if (any(not isinstance(f,Spacer) for f in main_flows)
+                and not any(not isinstance(f,Spacer) for f in cells[1])):
+            return []
+        if not any(cells):
+            return []
+        if not any(rest):
+            return [self]
+        return [self._fragment(cells),self._fragment(rest)]
 
 
 def _header(builder, template, intro=None):
@@ -176,50 +248,46 @@ def _header(builder, template, intro=None):
     if role:
         header.append(SourceParagraph(builder.esc(builder.clean_glyphs(role)), s['role'],
                                       source=('personal','role'), regions=regions))
-    contact = builder.contact_line()
+    has_contacts = any((item.get('text') or '').strip() or (item.get('url') or '').strip() for item in d['contacts'])
     if mode in ('photo_rail','rail'):
         if intro:
             header.extend(_section(builder,'profile',intro['title'],template))
         rail_width = 45*mm if mode=='photo_rail' else 34*mm
         page_width = A4[0]-2*template.side_margin*mm-12
         side_style = ParagraphStyle('side_contact',parent=s['contact'],
-                 fontSize=7.5*builder.k,leading=11*builder.k,spaceAfter=7*builder.k,
+                 fontSize=7.5*builder.k,leading=11*builder.k*builder.leading,spaceAfter=7*builder.k*builder.spacing,
                  textColor=colors.white if mode=='photo_rail' else colors.HexColor(builder.t['text']))
         side = []
         if mode=='photo_rail':
             portrait = _portrait(d['settings'].get('photo',''),circle=True,size=34,
                                   crop=d['settings'].get('photo_crop'))
             if portrait:
-                side.extend([portrait,Spacer(1,15*builder.k)])
+                side.extend([portrait,Spacer(1,15*builder.k*builder.spacing)])
             elif name:
-                side.extend([Monogram(name,builder),Spacer(1,15*builder.k)])
-        if mode=='rail':
+                side.extend([Monogram(name,builder),Spacer(1,15*builder.k*builder.spacing)])
+        if mode=='rail' and has_contacts:
             side.append(SourceParagraph('CONTACT',ParagraphStyle('contact_label',parent=s['skillhead'],
                                           spaceAfter=8*builder.k),source=('contacts',),regions=regions))
-        if contact:
-            for piece in contact.split(' &nbsp;&nbsp;·&nbsp;&nbsp; '):
-                if mode=='photo_rail':
-                    piece = piece.replace(builder.t['mid'],'#FFFFFF')
-                side.append(SourceParagraph(piece,side_style,source=('contacts',),regions=regions))
+        if has_contacts:
+            side.append(contact_block(builder,side_style,stacked=True,separator=False))
         if not side:
             side = [Spacer(1,1)]
-        table = Table([[side,header or Spacer(1,1)]],
+        table = FlowingRailTable([[side,header or Spacer(1,1)]],
                       colWidths=[rail_width,page_width-rail_width],splitInRow=1)
         table.setStyle(TableStyle([
             ('VALIGN',(0,0),(-1,-1),'TOP'),
             ('BACKGROUND',(0,0),(0,0),colors.HexColor(builder.t['navy'] if mode=='photo_rail' else builder.t['light'])),
             ('LEFTPADDING',(0,0),(0,0),10),('RIGHTPADDING',(0,0),(0,0),8),
             ('LEFTPADDING',(1,0),(1,0),21),('RIGHTPADDING',(1,0),(1,0),3),
-            ('TOPPADDING',(0,0),(-1,-1),12),('BOTTOMPADDING',(0,0),(-1,-1),10),
+            ('TOPPADDING',(0,0),(-1,-1),12*builder.spacing),('BOTTOMPADDING',(0,0),(-1,-1),10*builder.spacing),
         ]))
         return [table, builder.sp(12)]
     contact_para = None
-    if contact:
-        contact_markup = contact.replace(builder.t['mid'],'#FFFFFF') if mode=='executive' else contact
+    if has_contacts:
         contact_style = (ParagraphStyle('banner_contact',parent=s['contact'],
-                         textColor=colors.white,fontSize=7.8*builder.k,leading=11*builder.k)
+                         textColor=colors.white,fontSize=7.8*builder.k,leading=11*builder.k*builder.leading)
                          if mode=='executive' else s['contact'])
-        contact_para = SourceParagraph(contact_markup,contact_style,source=('contacts',),regions=regions)
+        contact_para = contact_block(builder,contact_style)
     if mode=='executive':
         left_style = ParagraphStyle('banner_name',parent=s['name'],textColor=colors.white)
         role_style = ParagraphStyle('banner_role',parent=s['role'],textColor=colors.white)
@@ -231,13 +299,13 @@ def _header(builder, template, intro=None):
             left.append(SourceParagraph(builder.esc(builder.clean_glyphs(d['personal']['role'])),role_style,
                                         source=('personal','role'),regions=regions))
         usable = A4[0]-2*template.side_margin*mm-12
-        table = Table([[left or Spacer(1,1), contact_para or Spacer(1,1)]],
+        table = FlowingRailTable([[left or Spacer(1,1), contact_para or Spacer(1,1)]],
                       colWidths=[usable*.62,usable*.38],splitInRow=1)
         table.setStyle(TableStyle([
             ('BACKGROUND',(0,0),(-1,-1),colors.HexColor(builder.t['navy'])),
             ('VALIGN',(0,0),(-1,-1),'MIDDLE'),
             ('LEFTPADDING',(0,0),(-1,-1),13),('RIGHTPADDING',(0,0),(-1,-1),12),
-            ('TOPPADDING',(0,0),(-1,-1),16),('BOTTOMPADDING',(0,0),(-1,-1),15),
+            ('TOPPADDING',(0,0),(-1,-1),16*builder.spacing),('BOTTOMPADDING',(0,0),(-1,-1),15*builder.spacing),
         ]))
         return [table,builder.sp(12)]
     if contact_para:
@@ -289,7 +357,7 @@ class CompactEntryPair(Flowable):
         page_height = A4[1] - 2 * builder.d['settings']['margin_mm'] * mm - 12
         self.max_height = min(190 * builder.k, page_height * .28)
         self.color = builder.C['line']
-        self.gap = 7 * builder.af
+        self.gap = 7 * builder.af * builder.spacing
         self.table = None
 
     @staticmethod
@@ -400,7 +468,7 @@ def _section(builder, key, title, template):
         if not out:
             out.append(heading)
     def add(text, style, source, prefix=''):
-        if str(text or '').strip():
+        if plain(text).strip():
             paragraph = builder.para(text, style, prefix=prefix, source=source)
             if template.layout=='photo_rail' and key in ('experience','education'):
                 paragraph.__class__ = TimelineParagraph
@@ -431,8 +499,7 @@ def _section(builder, key, title, template):
                 continue
             begin()
             start = len(out)
-            add(item['title'], s['project'], ('projects',i,'title'),
-                prefix=f'{i+1:02d}   ' if template.layout=='academic' else '')
+            add(item['title'], s['project'], ('projects',i,'title'))
             add(item['meta'], s['meta'], ('projects',i,'meta'))
             for n, line in enumerate(item['bullets']):
                 add(line, s['bullet'], ('projects',i,'bullets',n), prefix='• ')
@@ -478,8 +545,8 @@ def build(builder, target, template_name):
     margin = st['margin_mm']*mm
     side = template.side_margin*mm
     name = d['personal']['name'].strip()
-    meta = dict(pagesize=A4, title=f'{name.title()} - Curriculum Vitae' if name else 'Curriculum Vitae',
-                author=name.title(), subject='Curriculum Vitae', creator='CV Studio')
+    meta = dict(pagesize=A4, title=f'{name} - Curriculum Vitae' if name else 'Curriculum Vitae',
+                author=name, subject='Curriculum Vitae', creator='CV Studio')
     def decorate(canvas, doc):
         canvas.saveState()
         if template.layout=='photo_rail':
@@ -513,10 +580,9 @@ def build(builder, target, template_name):
     rail_width = (45 if template.layout=='photo_rail' else 34 if template.layout=='rail' else 32)*mm
     rail_style = ParagraphStyle('rail_heading',parent=builder.S['section'],
                      fontSize=(9.5 if template.layout=='photo_rail' else 9.1)*builder.k,
-                     leading=13*builder.k,spaceBefore=0,spaceAfter=7*builder.k,
+                     leading=13*builder.k*builder.leading,spaceBefore=0,spaceAfter=7*builder.k*builder.spacing,
                      textColor=colors.white if template.layout=='photo_rail'
                                              else colors.HexColor(builder.t['navy'])) if rail else None
-    section_number = 0
     for sec in st['sections']:
         if not sec.get('visible',True):
             continue
@@ -526,7 +592,6 @@ def build(builder, target, template_name):
         flows = _section(builder,sec['key'],title,template)
         if not flows:
             continue
-        section_number += 1
         if rail:
             longest = max((stringWidth(word,rail_style.fontName,rail_style.fontSize) for word in title.split()),default=1)
             available = rail_width-(8 if template.layout=='executive' else 18)
@@ -536,11 +601,7 @@ def build(builder, target, template_name):
                                     rule_color=builder.t['line'] if template.layout=='photo_rail' else None,
                                     source=('section',sec['key']),regions=builder.source_regions)
             labels = [label]
-            if template.layout=='rail':
-                number_style = ParagraphStyle('section_number',parent=rail_style,fontName='CV',
-                                               fontSize=8*builder.k,textColor=builder.C['mid'])
-                labels.insert(0,SourceParagraph(f'{section_number:02d}',number_style))
-            table = Table([[labels,flows[1:] or Spacer(1,1)]],
+            table = FlowingRailTable([[labels,flows[1:] or Spacer(1,1)]],
                           colWidths=[rail_width,page_width-rail_width],splitInRow=1)
             table.setStyle(TableStyle([
                 ('VALIGN',(0,0),(-1,-1),'TOP'),
@@ -548,7 +609,7 @@ def build(builder, target, template_name):
                  .8 if template.layout=='executive' else .4,colors.HexColor(builder.t['blue'] if template.layout=='executive' else builder.t['line'])),
                 ('LEFTPADDING',(0,0),(0,0),0 if template.layout=='executive' else 10),('RIGHTPADDING',(0,0),(0,0),8),
                 ('LEFTPADDING',(1,0),(1,0),21 if template.layout=='photo_rail' else 16),('RIGHTPADDING',(1,0),(1,0),3),
-                ('TOPPADDING',(0,0),(-1,-1),11),('BOTTOMPADDING',(0,0),(-1,-1),10),
+                ('TOPPADDING',(0,0),(-1,-1),11*builder.spacing),('BOTTOMPADDING',(0,0),(-1,-1),10*builder.spacing),
             ]))
             story.append(table)
         else:

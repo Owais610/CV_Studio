@@ -32,21 +32,21 @@ from tkinter import filedialog, messagebox, simpledialog, ttk
 from tkinter import font as tkfont
 
 from cv_studio_richtext import plain, reportlab_markup
-from cv_studio_pdf import SourceParagraph
+from cv_studio_pdf import SourceParagraph, contact_block
 from cv_studio_templates import DEFAULT_TEMPLATE, TEMPLATES, RuledHeading, polish_classic_styles, build as build_template
-from cv_studio_photo import normalize_crop
-from cv_studio_sections import normalize_sections, is_custom
-from cv_studio_appearance import DEFAULT_UI_THEME, DEFAULT_UI_MODE, DEFAULT_UI_STYLE, normalize_ui_theme, normalize_ui_style
+from cv_studio_data import migrate_document
+from cv_studio_sections import is_custom
+from cv_studio_appearance import DEFAULT_UI_THEME, DEFAULT_UI_MODE, DEFAULT_UI_STYLE
 from cv_studio_templates import custom_section
 import reportlab
 from reportlab.lib import colors
-from reportlab.lib.enums import TA_JUSTIFY, TA_RIGHT
+from reportlab.lib.enums import TA_JUSTIFY, TA_LEFT, TA_RIGHT
 from reportlab.lib.pagesizes import A4
 from reportlab.lib.styles import ParagraphStyle
 from reportlab.lib.units import mm
 from reportlab.pdfbase import pdfmetrics
 from reportlab.pdfbase.ttfonts import TTFont
-from reportlab.platypus import KeepTogether, Paragraph, SimpleDocTemplate, Spacer, Table, TableStyle
+from reportlab.platypus import KeepTogether, LayoutError, Paragraph, SimpleDocTemplate, Spacer, Table, TableStyle
 
 try:  # optional: live preview
     import pymupdf
@@ -256,7 +256,8 @@ def make_styles(t, k):
         for key in ("spaceBefore", "spaceAfter"):
             if key in kw:
                 kw[key] *= k
-        return ParagraphStyle(name, fontName=font, fontSize=size * k, leading=lead * k, textColor=color, **kw)
+        return ParagraphStyle(name, fontName=font, fontSize=size * k, leading=lead * k, textColor=color, allowWidows=0, allowOrphans=0, splitLongWords=1,
+                              justifyLastLine=0, justifyBreaks=0, **kw)
 
     return dict(
         name=S("name", "CV-Bold", 25, 27, C["navy"]),
@@ -273,28 +274,46 @@ def make_styles(t, k):
         edumeta=S("edumeta", "CV-Bold", 8.1, 10.2, C["mid"]),
         distinction=S("distinction", "CV-Bold", 8.6, 10.5, C["blue"]),
         skillhead=S("skillhead", "CV-Bold", 7.7, 9.7, C["navy"]),
-        skilltext=S("skilltext", "CV", 7.7, 10.1, C["text"], alignment=TA_JUSTIFY),
+        skilltext=S("skilltext", "CV", 7.7, 10.1, C["text"], alignment=TA_LEFT),
         gpalabel=S("gpalabel", "CV-Bold", 8, 10, C["mid"], alignment=TA_RIGHT),
         gpa=S("gpa", "CV-Bold", 12, 14, C["blue"], alignment=TA_RIGHT),
     )
 
 
 class CVBuilder:
-    def __init__(self, data, af=1.0):
+    def __init__(self, data, af=1.0, spacing=1.0, leading=1.0):
         self.d = data
         self.esc, self.clean_glyphs = esc, clean_glyphs
         st = data["settings"]
         self.t = THEMES.get(st["theme"], THEMES["Navy Blue"])
         self.C = {n: colors.HexColor(v) for n, v in self.t.items()}
         self.af = af
+        self.spacing, self.leading = spacing, leading
         self.k = af * st["font_scale"] / 100.0
         self.S = polish_classic_styles(make_styles(self.t, self.k), self.k)
+        # SimpleDocTemplate's default frame also reserves 6pt on either side.
+        self.content_width = A4[0]-34*mm-12
         self.links = 0
         self.source_regions = []
 
     # ---- helpers ----
     def sp(self, v):
-        return Spacer(1, v * self.af)
+        return Spacer(1, v * self.af * self.spacing)
+
+    def adjust_spacing(self):
+        """Compact the final template styles without changing their type sizes."""
+        if self.spacing==1 and self.leading==1:
+            return
+        for key, style in self.S.items():
+            self.S[key] = ParagraphStyle(style.name+'_fit',parent=style,
+                spaceBefore=style.spaceBefore*self.spacing,
+                spaceAfter=style.spaceAfter*self.spacing,
+                leading=min(style.leading,max(style.fontSize*1.18,style.leading*self.leading)))
+
+    def column_widths(self, *proportions):
+        """Fit the original table proportions inside the usable document frame."""
+        total = sum(proportions)
+        return [self.content_width * width / total for width in proportions]
 
     def rich(self, text, lc=None):
         markup, links = reportlab_markup(text, clean_glyphs, lc or self.t["mid"])
@@ -326,11 +345,12 @@ class CVBuilder:
 
     # ---- sections ----
     def sec_profile(self, title):
-        if not self.d["profile"].strip():
+        if not plain(self.d["profile"]).strip():
             return []
-        a = self.af
-        tbl = Table([[SourceParagraph(esc(title), self.S["section"], source=("section", "profile"), regions=self.source_regions), self.para(self.d["profile"], self.S["body"], source=("profile",))]],
-                    colWidths=[29 * mm, 144 * mm], splitInRow=1)
+        a = self.af * self.spacing
+        profile_heading = ParagraphStyle('profile_heading', parent=self.S['section'], keepWithNext=False)
+        tbl = Table([[SourceParagraph(esc(clean_glyphs(title)), profile_heading, source=("section", "profile"), regions=self.source_regions), self.para(self.d["profile"], self.S["body"], source=("profile",))]],
+                    colWidths=self.column_widths(29, 144), hAlign="LEFT", splitInRow=1)
         tbl.setStyle(TableStyle([
             ("BACKGROUND", (0, 0), (-1, -1), self.C["light"]),
             ("VALIGN", (0, 0), (-1, -1), "TOP"),
@@ -341,30 +361,36 @@ class CVBuilder:
         return [tbl]
 
     def heading(self, title, key):
-        return RuledHeading(esc(title), self.S["section"], source=("section", key), regions=self.source_regions,
+        return RuledHeading(esc(clean_glyphs(title)), self.S["section"], source=("section", key), regions=self.source_regions,
                             rule_color=self.t['line'])
 
     def sec_projects(self, title):
-        if not self.d["projects"]:
+        entries = [(i, p) for i, p in enumerate(self.d["projects"])
+                   if any(plain(value).strip() for value in (p['title'], p['meta'], *p['bullets']))]
+        if not entries:
             return []
         out = [self.heading(title, "projects")]
         title_style = ParagraphStyle('project_keep', parent=self.S['project'], keepWithNext=1)
         meta_style = ParagraphStyle('meta_keep', parent=self.S['meta'], keepWithNext=1)
-        for i, p in enumerate(self.d["projects"]):
+        for i, p in entries:
             elems = [self.para(p["title"], title_style, source=("projects", i, "title"))]
-            if p["meta"].strip():
+            if plain(p["meta"]).strip():
                 elems.append(self.para(p["meta"], meta_style, source=("projects", i, "meta")))
-            elems += [self.para(b, self.S["bullet"], prefix="• ", source=("projects", i, "bullets", n)) for n, b in enumerate(p["bullets"]) if b.strip()]
+            elems += [self.para(b, self.S["bullet"], prefix="• ", source=("projects", i, "bullets", n)) for n, b in enumerate(p["bullets"]) if plain(b).strip()]
+            for flowable in elems[:-1]:
+                flowable.keepWithNext = len(flowable.getPlainText()) < 220
+            if elems:
+                elems[-1].keepWithNext = False
             out += elems + [self.sp(4)]
         return out
 
     def sec_skills(self, title):
         rows = [[self.para(s["category"], self.S["skillhead"], source=("skills", i, "category")), self.para(s["items"], self.S["skilltext"], source=("skills", i, "items"))]
-                for i, s in enumerate(self.d["skills"]) if s["category"].strip() or s["items"].strip()]
+                for i, s in enumerate(self.d["skills"]) if plain(s["category"]).strip() or plain(s["items"]).strip()]
         if not rows:
             return []
-        a = self.af
-        tbl = Table(rows, colWidths=[39 * mm, 134 * mm], splitInRow=1)
+        a = self.af * self.spacing
+        tbl = Table(rows, colWidths=self.column_widths(39, 134), hAlign="LEFT", splitInRow=1)
         tbl.setStyle(TableStyle([
             ("VALIGN", (0, 0), (-1, -1), "TOP"),
             ("LINEBELOW", (0, 0), (-1, -2), 0.4, self.C["line"]),
@@ -375,16 +401,19 @@ class CVBuilder:
         return [self.heading(title, "skills"), tbl]
 
     def sec_experience(self, title):
-        if not self.d["experience"]:
+        entries = [(i, e) for i, e in enumerate(self.d["experience"])
+                   if any(plain(e[key]).strip() for key in ('title', 'company', 'dates', 'description'))]
+        if not entries:
             return []
-        a, out = self.af, [self.heading(title, "experience")]
-        for i, e in enumerate(self.d["experience"]):
+        a, out = self.af * self.spacing, [self.heading(title, "experience")]
+        identity_style = ParagraphStyle('experience_identity', parent=self.S['body'], alignment=TA_LEFT)
+        for i, e in entries:
             sub = " · ".join(x for x in (e["company"].strip(), e["dates"].strip()) if x)
             left = SourceParagraph(
                 f"<b>{esc(clean_glyphs(e['title']))}</b><br/><font color='{self.t['mid']}'>{esc(clean_glyphs(sub))}</font>",
-                self.S["body"], source=("experience", i, "identity"), regions=self.source_regions)
-            lines = [self.para(l, self.S["small"], source=("experience", i, "description", n)) for n, l in enumerate(e["description"].splitlines()) if l.strip()]
-            tbl = Table([[left, lines or ""]], colWidths=[64 * mm, 109 * mm], splitInRow=1)
+                identity_style, source=("experience", i, "identity"), regions=self.source_regions)
+            lines = [self.para(l, self.S["small"], source=("experience", i, "description", n)) for n, l in enumerate(e["description"].splitlines()) if plain(l).strip()]
+            tbl = Table([[left, lines or ""]], colWidths=self.column_widths(64, 109), hAlign="LEFT", splitInRow=1)
             tbl.setStyle(TableStyle([
                 ("VALIGN", (0, 0), (-1, -1), "TOP"),
                 ("LINEBEFORE", (1, 0), (1, 0), 1, self.C["blue"]),
@@ -396,23 +425,28 @@ class CVBuilder:
         return out
 
     def sec_education(self, title):
-        if not self.d["education"]:
+        entries = [(i, e) for i, e in enumerate(self.d["education"])
+                   if any(plain(value).strip() for value in e.values())]
+        if not entries:
             return []
         rows = []
-        for i, e in enumerate(self.d["education"]):
+        for i, e in entries:
             left = [self.para(e["degree"], self.S["edu"], source=("education", i, "degree")), self.para(e["institution"], self.S["edumeta"], source=("education", i, "institution"))]
-            if e["dates"].strip():
+            if plain(e["dates"]).strip():
                 left.append(self.para(e["dates"], self.S["edumeta"], source=("education", i, "dates")))
-            if e["distinction"].strip():
+            if plain(e["distinction"]).strip():
                 left.append(self.para(e["distinction"], self.S["distinction"], source=("education", i, "distinction")))
-            if e["coursework"].strip():
-                left += [self.sp(3), self.para("<b>Coursework:</b> " + e["coursework"], self.S["small"], source=("education", i, "coursework"))]
+            if plain(e["coursework"]).strip():
+                left.append(self.sp(3))
+                left += [self.para(line, self.S['small'], prefix='<b>Coursework:</b> ' if n == 0 else '',
+                                   source=('education', i, 'coursework'))
+                         for n, line in enumerate(e['coursework'].splitlines()) if plain(line).strip()]
             right = ""
-            if e["gpa"].strip():
+            if plain(e["gpa"]).strip():
                 right = [SourceParagraph("GPA", self.S["gpalabel"], source=("education", i, "gpa"), regions=self.source_regions), self.sp(3), self.para(e["gpa"], self.S["gpa"], source=("education", i, "gpa"))]
             rows.append([left, right])
-        a = self.af
-        tbl = Table(rows, colWidths=[141 * mm, 32 * mm], splitInRow=1)
+        a = self.af * self.spacing
+        tbl = Table(rows, colWidths=self.column_widths(141, 32), hAlign="LEFT", splitInRow=1)
         tbl.setStyle(TableStyle([
             ("VALIGN", (0, 0), (-1, -1), "TOP"),
             ("LINEBELOW", (0, 0), (-1, -2), 0.5, self.C["line"]),
@@ -422,23 +456,33 @@ class CVBuilder:
         return [self.heading(title, "education"), tbl]
 
     # ---- assembly ----
+    def page_footer(self,canvas,document):
+        """Keep later-page numbering inside even the smallest document margin."""
+        canvas.saveState()
+        canvas.setFillColor(self.C['mid'])
+        canvas.setFont('CV',6.8)
+        canvas.drawRightString(A4[0]-document.rightMargin-6,
+                               max(9,document.bottomMargin*.5),f'Page {document.page}')
+        canvas.restoreState()
+
     def build(self, target):
+        self.adjust_spacing()
         d, st = self.d, self.d["settings"]
         name = d["personal"]["name"].strip()
         margin = st["margin_mm"] * mm
         doc = SimpleDocTemplate(
             target, pagesize=A4, leftMargin=17 * mm, rightMargin=17 * mm, topMargin=margin, bottomMargin=margin,
-            title=f"{name.title()} - Curriculum Vitae" if name else "Curriculum Vitae",
-            author=name.title(), subject="Curriculum Vitae", creator=name.title(),
+            title=f"{name} - Curriculum Vitae" if name else "Curriculum Vitae",
+            author=name, subject="Curriculum Vitae", creator="CV Studio",
         )
         story = []
         if name:
             story.append(SourceParagraph(esc(clean_glyphs(name)), self.S["name"], source=("personal", "name"), regions=self.source_regions))
         if d["personal"]["role"].strip():
             story.append(SourceParagraph(esc(clean_glyphs(d["personal"]["role"])), self.S["role"], source=("personal", "role"), regions=self.source_regions))
-        contact = self.contact_line()
+        contact = contact_block(self)
         if contact:
-            story.append(SourceParagraph(contact, self.S["contact"], source=("contacts",), regions=self.source_regions))
+            story.append(contact)
         story.append(self.sp(7))
         for sec in st["sections"]:
             if sec.get("visible", True):
@@ -447,87 +491,53 @@ class CVBuilder:
                     story += custom_section(self, sec['key'], title)
                 else:
                     story += getattr(self, "sec_" + sec["key"])(title)
-        doc.build(story)
+        doc.build(story,onLaterPages=self.page_footer)
         return doc.page
 
 
-AUTOFIT_STEPS = [1.0, 0.97, 0.94, 0.91, 0.88, 0.85, 0.82, 0.79, 0.76]
+AUTOFIT_STEPS = [1.0, 0.98, 0.96, 0.94, 0.92]
 
 
 def render_pdf(data, source_map=None):
-    """Return (pdf_bytes, pages, links, autofit_factor). Shrinks to one page if 'autofit' is on."""
-    steps = AUTOFIT_STEPS if data["settings"]["autofit"] else [1.0]
-    for af in steps:
-        buf, builder = io.BytesIO(), CVBuilder(data, af)
+    """Reduce pages or overflow using spacing first and preserve full-size text when possible."""
+    scale = data['settings']['font_scale']/100
+    candidates = [(1.0,1.0,1.0)]
+    if data['settings']['autofit']:
+        candidates += [(1.0,.92,1.0),(1.0,.84,.97),(1.0,.76,.94)]
+        if scale>=1:
+            candidates += [(af,.76,.94) for af in AUTOFIT_STEPS[1:]]
+    best = None
+    for af, spacing, leading in candidates:
+        buf, builder = io.BytesIO(), CVBuilder(data, af, spacing=spacing, leading=leading)
         template = data['settings'].get('template', DEFAULT_TEMPLATE)
-        pages = builder.build(buf) if template == DEFAULT_TEMPLATE else build_template(builder, buf, template)
+        try:
+            pages = builder.build(buf) if template == DEFAULT_TEMPLATE else build_template(builder, buf, template)
+        except LayoutError:
+            if best is None:
+                raise
+            # A rejected compact layout must not break an otherwise valid CV.
+            continue
+        last_bottom = max((region['rect'][3] for region in builder.source_regions
+                           if region['page']==pages-1),default=0)
+        # A spacing-only fit can improve the page flow even when the content
+        # still needs two pages. Never reduce text just to shorten that tail.
+        better_overflow = (best is not None and pages==best[1] and af==best[3]==1
+                           and last_bottom<=best[5]-12)
+        if best is None or pages<best[1] or better_overflow:
+            best = (buf.getvalue(),pages,builder.links,af,builder.source_regions,last_bottom)
         if pages <= 1:
             break
     if source_map is not None:
-        source_map[:] = builder.source_regions
-    return buf.getvalue(), pages, builder.links, af
+        source_map[:] = best[4]
+    return best[:4]
 
 
 # ============================================================
 # DATA MIGRATION  (old JSON files keep working)
 # ============================================================
 
-def _walk(o):
-    if isinstance(o, str):
-        return to_markup(o)
-    if isinstance(o, list):
-        return [_walk(x) for x in o]
-    if isinstance(o, dict):
-        return {k: _walk(v) for k, v in o.items()}
-    return o
-
-
 def migrate(raw):
-    d = deepcopy(DEFAULT_DATA)
-    settings_raw = (raw.get("settings") or {}) if isinstance(raw, dict) else {}
-    raw = _walk({k: v for k, v in raw.items() if k != "settings"})
-
-    p = raw.get("personal") or {}
-    d["personal"]["name"] = p.get("name", d["personal"]["name"])
-    d["personal"]["role"] = p.get("role", d["personal"]["role"])
-
-    if "contacts" in raw:
-        d["contacts"] = [{"text": c.get("text", ""), "url": c.get("url", "")} for c in raw["contacts"]]
-    elif any(k in p for k in ("phone", "email", "github", "orcid")):
-        contacts = []
-        if p.get("phone"):
-            contacts.append({"text": p["phone"], "url": ""})
-        if p.get("email"):
-            contacts.append({"text": p["email"], "url": ""})
-        for k in ("github", "orcid"):
-            if p.get(k):
-                contacts.append({"text": p.get(k + "_display") or display_url(p[k]), "url": p[k]})
-        d["contacts"] = contacts
-
-    if "profile" in raw:
-        d["profile"] = raw["profile"]
-    if "projects" in raw:
-        d["projects"] = [{"title": x.get("title", ""), "meta": x.get("meta", ""),
-                          "bullets": list(x.get("bullets", []))} for x in raw["projects"]]
-    if "skills" in raw:
-        d["skills"] = [{"category": s[0], "items": s[1]} if isinstance(s, (list, tuple))
-                       else {"category": s.get("category", ""), "items": s.get("items", "")} for s in raw["skills"]]
-    if "experience" in raw:
-        d["experience"] = [{k: x.get(k, "") for k in ("title", "company", "dates", "description")} for x in raw["experience"]]
-    if "education" in raw:
-        d["education"] = [{k: x.get(k, "") for k in EDU_KEYS} for x in raw["education"]]
-
-    st = d["settings"]
-    st.update({k: v for k, v in settings_raw.items() if k != "sections"})
-    st['ui_theme'] = normalize_ui_theme(st.get('ui_theme'))
-    st['ui_style'] = normalize_ui_style(st.get('ui_style'))
-    if st.get('template') not in TEMPLATES:
-        st['template'] = DEFAULT_TEMPLATE
-    if not isinstance(st.get('photo'), str):
-        st['photo'] = ''
-    st['photo_crop'] = normalize_crop(st.get('photo_crop'))
-    normalize_sections(d, raw, settings_raw, DEFAULT_SECTIONS)
-    return d
+    return migrate_document(raw, DEFAULT_DATA, DEFAULT_SECTIONS, THEMES, TEMPLATES)
 
 
 # The shared UI keeps the two editions visually and behaviorally consistent.

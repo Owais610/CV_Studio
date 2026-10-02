@@ -670,6 +670,14 @@ class Choice(Button):
             self.on_change()
 
 
+def update_scroll_region(canvas):
+    """Keep short content anchored at the top instead of allowing blank scrolling."""
+    # Tk can defer resizing an offscreen window after its children collapse.
+    # Its requested height remains current even when bbox('all') is stale.
+    canvas.configure(scrollregion=(0,0,canvas.winfo_width(),
+        max(canvas.scroll_content.winfo_reqheight(),canvas.winfo_height())))
+
+
 class ModernScrollbar(tk.Canvas):
     """Quiet rounded thumb; an unnecessary scrollbar draws no track or thumb."""
     def __init__(self,parent,ui,command,orient='vertical',bg='bg'):
@@ -714,6 +722,8 @@ class ModernScrollbar(tk.Canvas):
             self.create_line(start+3,6,start+size-3,6,width=width,fill=color,capstyle='round')
 
     def press(self,event):
+        if self.last-self.first>=.999:
+            return
         position=event.y if self.orient=='vertical' else event.x
         length,size,start=self.dimensions()
         if not start<=position<=start+size:
@@ -722,7 +732,7 @@ class ModernScrollbar(tk.Canvas):
         self.draw()
 
     def motion(self,event):
-        if self.drag:
+        if self.drag and self.last-self.first<.999:
             position=event.y if self.orient=='vertical' else event.x
             length,size,start=self.dimensions()
             movement=(position-self.drag[0])/max(1,length-8-size)*(1-self.last+self.first)
@@ -743,8 +753,8 @@ class SplitPane(tk.PanedWindow):
     def retheme(self):
         self.configure(bg=self.ui['line'])
 
-    def add(self,widget,weight=1):
-        super().add(widget,stretch='always',padx=0,pady=0)
+    def add(self,widget,weight=1,minsize=1):
+        super().add(widget,stretch='always',minsize=minsize,padx=0,pady=0)
 
     def sashpos(self,index,position=None):
         if position is not None:
@@ -868,14 +878,19 @@ class ScrollArea(Frame):
         self.bar.pack(side='right', fill='y', padx=(0, 3))
         self.canvas.pack(side='left', fill='both', expand=True)
         self.inner = Frame(self.canvas, app.ui, 'bg')
+        self.canvas.scroll_content = self.inner
         self.window = self.canvas.create_window(0, 0, window=self.inner, anchor='nw')
-        self.inner.bind('<Configure>', lambda e: self.canvas.configure(scrollregion=self.canvas.bbox('all')))
-        self.canvas.bind('<Configure>', lambda e: self.canvas.itemconfigure(self.window, width=e.width))
+        self.inner.bind('<Configure>', lambda e: update_scroll_region(self.canvas))
+        self.canvas.bind('<Configure>', self.resize)
         self.canvas.scroll_target = self.canvas
         app.ui.watch(self.canvas, self.retheme_canvas)
 
     def retheme_canvas(self):
         self.canvas.configure(bg=self.ui['bg'])
+
+    def resize(self,event):
+        self.canvas.itemconfigure(self.window,width=event.width)
+        update_scroll_region(self.canvas)
 
     def reveal(self, widget):
         self.update_idletasks()
@@ -903,7 +918,8 @@ class RichTextEditor(Frame):
     A Tcl widget proxy catches typing, paste, cut, IME and native edit commands.
     This is important: Tk's built-in undo alone does not undo changes to tags.
     """
-    def __init__(self, parent, app, label, value='', rich=True, lines=2, hint='', on_change=None, reorder_lines=False):
+    def __init__(self, parent, app, label, value='', rich=True, lines=2, hint='', on_change=None, reorder_lines=False,
+                 word_count=False):
         super().__init__(parent, app.ui)
         self.app, self.rich, self.label = app, rich, label
         self.on_change = on_change or app.changed
@@ -911,7 +927,12 @@ class RichTextEditor(Frame):
         self.history, self.history_pos, self.last_edit, self.last_kind = [], 0, 0, ''
         self.min_lines, self.max_lines = lines, max(lines, 12 if lines>2 else 4)
         self.pack(fill='x', pady=(0, 16))
-        Label(self, app.ui, label, font='label').pack(anchor='w', pady=(0, 7))
+        label_row = Frame(self,app.ui)
+        label_row.pack(fill='x',pady=(0,7))
+        self.word_count = tk.StringVar(value='0 words') if word_count else None
+        if self.word_count is not None:
+            Label(label_row,app.ui,textvariable=self.word_count,font='small',fg='muted').pack(side='right')
+        Label(label_row, app.ui, label, font='label').pack(side='left')
         self.box = Surface(self, app.ui, 'field', outer='surface', radius=8, shadow=False, padx=5, pady=5)
         self.box.pack(fill='x')
         self.toolbar = None
@@ -963,6 +984,9 @@ class RichTextEditor(Frame):
         self.input.bind('<Control-z>', lambda e: self.undo())
         self.input.bind('<Control-y>', lambda e: self.redo())
         self.input.bind('<Control-Shift-Z>', lambda e: self.redo())
+        # Tk Text treats Ctrl+O as inserting a newline. Handle Open before
+        # that class binding, so canceling the picker leaves the CV unchanged.
+        self.input.bind('<Control-o>', lambda e: (app.open_file(), 'break')[1])
         self.input.bind('<MouseWheel>', app.wheel)
         if rich:
             for key, fn in [('b', lambda: self.toggle('bold')), ('i', lambda: self.toggle('italic')), ('k', self.edit_link)]:
@@ -1178,6 +1202,9 @@ class RichTextEditor(Frame):
         address.focus_set()
 
     def paint(self):
+        if self.word_count is not None:
+            count = len(self.visible().split())
+            self.word_count.set(f'{count} '+('word' if count==1 else 'words'))
         self.attrs = [NORMAL if ch == '\n' else state for ch, state in zip(self.visible(), self.attrs)]
         for tag in ('bold', 'italic', 'both', 'hyperlink'):
             self.input.tag_remove(tag, '1.0', 'end')
@@ -1390,6 +1417,10 @@ class SectionCard(Surface):
         if value:
             self.body.pack(fill='x', pady=(18,0))
         else:
+            focused = self.app.focus_get()
+            if focused is not None and str(focused).startswith(str(self.body)+'.'):
+                self.chevron.focus_set()
+                self.app.active_editor = None
             self.body.pack_forget()
         self.chevron.text = '▾' if value else '▸'
         self.chevron.draw()
@@ -1631,9 +1662,10 @@ class StudioApp(tk.Tk):
         self.bind('<FocusOut>', self.surface_focus_changed, add='+')
         self.bind('<Button-4>', lambda e: self.wheel(e,-1))
         self.bind('<Button-5>', lambda e: self.wheel(e,1))
-        for key, fn in [('<Control-s>',self.save),('<Control-Shift-S>',self.save_as),
+        for key, fn in [('<Control-n>',self.reset_defaults),('<Control-s>',self.save),('<Control-Shift-S>',self.save_as),
                         ('<Control-o>',self.open_file),('<Control-e>',self.export_pdf)]:
             self.bind(key, lambda e,f=fn:(f(),'break')[1])
+        self.bind('<Control-0>',lambda e:(self.fit('page'),'break')[1])
         for key, name in [('<Alt-f>','File'),('<Alt-e>','Edit'),('<Alt-v>','View'),('<F1>','Help')]:
             self.bind(key, lambda e,n=name:self.open_app_menu(n))
         self.protocol('WM_DELETE_WINDOW', self.on_close)
@@ -1654,19 +1686,19 @@ class StudioApp(tk.Tk):
         toolbar = Frame(self, self.ui, padx=22, pady=14)
         toolbar.pack(fill='x')
         doc = Frame(toolbar, self.ui)
-        doc.pack(side='left', fill='x', expand=True)
         self.file_label = Label(doc, self.ui, font='heading', textvariable=self.document_name)
         self.file_label.pack(anchor='w')
         Label(doc, self.ui, font='small', fg='muted', textvariable=self.save_state).pack(anchor='w', pady=(4,0))
         Button(toolbar, self.ui, 'Export PDF', self.export_pdf, kind='primary', font='bold').pack(side='right')
         Button(toolbar, self.ui, 'Save', self.save).pack(side='right', padx=(8,10))
         Button(toolbar, self.ui, 'Open', self.open_file, kind='ghost').pack(side='right')
+        doc.pack(side='left', fill='x', expand=True)
         Frame(self, self.ui, 'line', height=1).pack(fill='x')
 
         footer = Frame(self, self.ui, padx=20, pady=7)
         footer.pack(side='bottom', fill='x')
-        Label(footer, self.ui, textvariable=self.status, font='small', fg='muted').pack(side='left')
         Label(footer, self.ui, 'Double-click PDF text to edit', font='small', fg='muted').pack(side='right')
+        Label(footer, self.ui, textvariable=self.status, font='small', fg='muted',width=1).pack(side='left',fill='x',expand=True)
         workspace = Frame(self, self.ui, 'bg')
         workspace.pack(fill='both', expand=True)
         self.workspace=workspace
@@ -1682,9 +1714,13 @@ class StudioApp(tk.Tk):
         self.ui.watch(self.nav_canvas,self.theme_sidebar)
         sidebar = Frame(self.nav_canvas, self.ui, 'rail', padx=10, pady=20)
         self.nav_body=sidebar
+        self.nav_canvas.scroll_content=sidebar
         nav_window=self.nav_canvas.create_window(0,0,window=sidebar,anchor='nw')
-        sidebar.bind('<Configure>',lambda e:self.nav_canvas.configure(scrollregion=self.nav_canvas.bbox('all')))
-        self.nav_canvas.bind('<Configure>',lambda e:self.nav_canvas.itemconfigure(nav_window,width=e.width))
+        sidebar.bind('<Configure>',lambda e:update_scroll_region(self.nav_canvas))
+        def resize_sidebar(event):
+            self.nav_canvas.itemconfigure(nav_window,width=event.width)
+            update_scroll_region(self.nav_canvas)
+        self.nav_canvas.bind('<Configure>',resize_sidebar)
         self.sidebar_reorder = ReorderController(self,sidebar,
             lambda: ReorderController.widget_rows([(row['key'],self.nav[row['key']]) for row in self.sections.rows]),
             self.reorder_sections,label='section',
@@ -1709,8 +1745,8 @@ class StudioApp(tk.Tk):
         self.paned.pack(fill='both', expand=True)
         self.editor_host = Frame(self.paned, self.ui, 'bg')
         self.preview_host = Frame(self.paned, self.ui, 'canvas')
-        self.paned.add(self.editor_host, weight=1)
-        self.paned.add(self.preview_host, weight=1)
+        self.paned.add(self.editor_host, weight=1,minsize=405)
+        self.paned.add(self.preview_host, weight=1,minsize=340)
         self.split_initialized = False
         self.paned.bind('<Configure>', self.place_split)
         self.paned.bind('<ButtonRelease-1>', self.clamp_split)
@@ -1920,7 +1956,6 @@ class StudioApp(tk.Tk):
         bar = Frame(self.preview_host, self.ui, padx=18, pady=15)
         bar.pack(fill='x')
         copy = Frame(bar, self.ui)
-        copy.pack(side='left', fill='x', expand=True)
         Label(copy, self.ui, 'Preview', font='heading').pack(anchor='w')
         Label(copy, self.ui, textvariable=self.preview_state, font='small', fg='muted').pack(anchor='w', pady=(3,0))
         controls = Frame(bar, self.ui)
@@ -1929,6 +1964,7 @@ class StudioApp(tk.Tk):
         self.zoom_button = Button(controls,self.ui,'Fit page',self.zoom_menu,width=90,compact=True)
         self.zoom_button.pack(side='left', padx=3)
         Button(controls,self.ui,'+',lambda:self.set_zoom(1.15),width=32,compact=True,kind='ghost').pack(side='left')
+        copy.pack(side='left', fill='x', expand=True)
         stage = Frame(self.preview_host,self.ui,'canvas')
         stage.pack(fill='both',expand=True)
         self.pcanvas = tk.Canvas(stage,highlightthickness=0,bd=0,yscrollincrement=1,xscrollincrement=1)
@@ -1956,6 +1992,8 @@ class StudioApp(tk.Tk):
             self.active_drag.cancel()
         self.finish_section_rename()
         previous = getattr(self, 'current_section', None)
+        if previous != key:
+            self.active_editor = None
         self.current_section = key
         for name, page in self.pages.items():
             page.pack_forget()
@@ -1976,6 +2014,7 @@ class StudioApp(tk.Tk):
             self.active_drag.cancel()
         self.finish_section_rename(commit=False)
         data = self.engine.migrate(raw)
+        self.last_pdf = None
         self.loading = True
         if hasattr(self,'sections'):
             self.sections.dispose()
@@ -2012,7 +2051,8 @@ class StudioApp(tk.Tk):
         self.lists['contacts'] = ItemList(self.pages['header'].inner,self,'contacts',data['contacts'])
         group = InspectorGroup(self.pages['profile'].inner,self,'Professional summary')
         self.fields[('profile',)] = RichTextEditor(group,self,'Your introduction',data['profile'],True,8,
-                                                  'Aim for a focused summary of roughly 60–100 words.',reorder_lines=True)
+                                                  'Aim for a focused summary of roughly 60–100 words.',reorder_lines=True,
+                                                  word_count=True)
         for key in ('projects','skills','experience','education'):
             self.lists[key] = ItemList(self.pages[key].inner,self,key,data[key])
         self.sections = SectionState(self,data['settings']['sections'])
@@ -2098,15 +2138,20 @@ class StudioApp(tk.Tk):
         copy.pack(side='left',fill='x',expand=True)
         Label(copy,self.ui,'Portrait',font='label').pack(anchor='w',pady=(6,4))
         self.photo_label = Label(copy,self.ui,'',font='small',fg='muted')
-        self.photo_label.pack(anchor='w')
+        self.photo_label.pack(fill='x')
+        self.photo_label.bind('<Configure>',lambda e:self.photo_label.configure(wraplength=max(120,e.width)))
         actions = Frame(self.photo_panel,self.ui)
         actions.pack(fill='x',pady=(10,0))
-        self.photo_choose = Button(actions,self.ui,'Upload photo…',self.choose_photo,compact=True)
-        self.photo_choose.pack(side='left')
-        self.photo_edit = Button(actions,self.ui,'Crop / Edit',self.edit_photo,compact=True,kind='ghost')
-        self.photo_edit.pack(side='left',padx=4)
-        self.photo_remove = Button(actions,self.ui,'Remove photo',self.remove_photo,kind='ghost',compact=True)
-        self.photo_remove.pack(side='left')
+        self.photo_actions = actions
+        self._photo_actions_inline = None
+        self.photo_choose = Button(actions,self.ui,'Choose photo…',self.choose_photo,compact=True,font='small',
+                                   width=self.ui.fonts['small'].measure('Replace photo…')+26)
+        self.photo_choose.grid(row=0,column=0,sticky='w')
+        self.photo_edit = Button(actions,self.ui,'Edit crop',self.edit_photo,compact=True,kind='ghost',font='small')
+        self.photo_edit.grid(row=0,column=1,sticky='w',padx=4)
+        self.photo_remove = Button(actions,self.ui,'Remove photo',self.remove_photo,kind='ghost',compact=True,font='small')
+        self.photo_remove.grid(row=0,column=2,sticky='w')
+        actions.bind('<Configure>',self.layout_photo_actions)
         Label(group,self.ui,'Colour theme',font='label').pack(anchor='w',pady=(0,7))
         Choice(group,self,self.v_theme,list(self.engine.THEMES),self.changed).pack(anchor='w',pady=(0,18))
         Label(group,self.ui,'Text size',font='label').pack(anchor='w')
@@ -2126,8 +2171,8 @@ class StudioApp(tk.Tk):
         Label(row,self.ui,'mm',font='small',fg='muted').pack(side='left',padx=8)
         self.v_margin.trace_add('write',lambda *_:self.changed())
         self.margin_entry.bind('<FocusOut>',lambda e:self.v_margin.set(str(self.number(self.v_margin.get(),13,6,24))))
-        Toggle(group,self,self.v_autofit,'Auto-fit to one page',self.changed).pack(anchor='w')
-        hint = Label(group,self.ui,'Gently reduces text size when the CV needs more space.',font='small',fg='muted',justify='left')
+        Toggle(group,self,self.v_autofit,'Prefer one page',self.changed).pack(anchor='w')
+        hint = Label(group,self.ui,'Tightens spacing to fit more on each page. Text is reduced by up to 8% only if it saves a page; longer CVs can still use multiple pages.',font='small',fg='muted',justify='left')
         hint.pack(fill='x',pady=(6,0))
         hint.bind('<Configure>',lambda e:hint.configure(wraplength=max(120,e.width)))
         self.template_changed(render=False)
@@ -2168,10 +2213,22 @@ class StudioApp(tk.Tk):
         self.refresh_photo_controls()
         self.changed()
 
+    def layout_photo_actions(self,event=None):
+        width = self.photo_actions.winfo_width()
+        if width < 2:
+            return
+        required = sum(int(button.cget('width')) for button in
+                       (self.photo_choose,self.photo_edit,self.photo_remove))+8
+        inline = width >= required
+        if inline != self._photo_actions_inline:
+            self._photo_actions_inline = inline
+            self.photo_remove.grid(row=0 if inline else 1,column=2 if inline else 0,
+                                   sticky='w',pady=(0 if inline else 4,0))
+
     def refresh_photo_controls(self):
         has_photo = bool(self.v_photo.get())
         self.photo_label.configure(text='Drag & zoom to adjust your portrait' if has_photo else 'Optional · the layout also works without one')
-        self.photo_choose.text = 'Replace photo…' if has_photo else 'Upload photo…'
+        self.photo_choose.text = 'Replace photo…' if has_photo else 'Choose photo…'
         self.photo_choose.draw()
         for button in (self.photo_edit,self.photo_remove):
             button.enabled = has_photo
@@ -2263,7 +2320,7 @@ class StudioApp(tk.Tk):
     def number(value,default,lo,hi):
         try:
             return max(lo,min(hi,round(float(value))))
-        except (ValueError,TypeError):
+        except (ValueError,TypeError,OverflowError):
             return default
 
     def collect(self):
@@ -2317,9 +2374,13 @@ class StudioApp(tk.Tk):
         while widget:
             canvas = getattr(widget,'scroll_target',None)
             if canvas is not None:
+                if hasattr(canvas,'scroll_content'):
+                    update_scroll_region(canvas)
                 if horizontal:
-                    canvas.xview_scroll(amount,'units')
-                else:
+                    first,last = canvas.xview()
+                    if (amount<0 and first>1e-5) or (amount>0 and last<1-1e-5):
+                        canvas.xview_scroll(amount,'units')
+                elif can_scroll_view(canvas,amount):
                     canvas.yview_scroll(amount,'units')
                 return 'break'
             widget = widget.master
@@ -2327,7 +2388,7 @@ class StudioApp(tk.Tk):
 
     def open_app_menu(self, name):
         if name=='File':
-            items = [('New from starter…','',self.reset_defaults), ('Open CV…','Ctrl+O',self.open_file),
+            items = [('New CV…','Ctrl+N',self.reset_defaults), ('Open CV…','Ctrl+O',self.open_file),
                      ('Save','Ctrl+S',self.save), ('Save as…','Ctrl+Shift+S',self.save_as), None,
                      ('Export PDF…','Ctrl+E',self.export_pdf), ('Open exported PDF','',self.open_pdf,bool(self.last_pdf)),
                      None, ('Exit','',self.on_close)]
@@ -2335,7 +2396,7 @@ class StudioApp(tk.Tk):
             items = self.edit_menu()
         elif name=='View':
             items = [('Zoom in','',lambda:self.set_zoom(1.15)), ('Zoom out','',lambda:self.set_zoom(1/1.15)),
-                     ('Fit page','',lambda:self.fit('page')), ('Fit width','',lambda:self.fit('width')), None,
+                     ('Fit page','Ctrl+0',lambda:self.fit('page')), ('Fit width','',lambda:self.fit('width')), None,
                      (('✓  ' if self.ui.mode=='Light' else '')+'Light appearance','',lambda:self.set_mode('Light')),
                      (('✓  ' if self.ui.mode=='Dark' else '')+'Dark appearance','',lambda:self.set_mode('Dark'))]
         else:
@@ -2345,7 +2406,7 @@ class StudioApp(tk.Tk):
 
     def edit_menu(self):
         editor = self.active_editor
-        exists = editor is not None and editor.winfo_exists()
+        exists = editor is not None and editor.winfo_exists() and editor.winfo_viewable()
         return [('Undo','Ctrl+Z',lambda:self.edit_action('undo'),exists and editor.history_pos>0),
                 ('Redo','Ctrl+Y',lambda:self.edit_action('redo'),exists and editor.history_pos+1<len(editor.history)), None,
                 ('Cut','Ctrl+X',lambda:self.edit_action('cut'),exists),
@@ -2355,7 +2416,7 @@ class StudioApp(tk.Tk):
 
     def edit_action(self, action):
         editor = self.active_editor
-        if editor and editor.winfo_exists():
+        if editor and editor.winfo_exists() and editor.winfo_viewable():
             editor.input.focus_set()
             if action in ('cut','copy','paste'):
                 editor.input.event_generate('<<'+action.title()+'>>')
@@ -2583,26 +2644,32 @@ class StudioApp(tk.Tk):
         self.status.set('Editing '+field.label.lower())
 
     def confirm_replace(self):
+        self.finish_section_rename()
         if not self.dirty:
             return True
         result = messagebox.askyesnocancel('Unsaved changes','Save your changes before continuing?',parent=self)
         return False if result is None else (self.save() if result else True)
 
-    def _write_json(self,path):
-        self.finish_section_rename()
-        data = self.collect()
-        # Replace only after the new document has been written successfully.
+    @staticmethod
+    def _write_file(path,content):
+        # Replace an existing document only after the new file is fully written.
         target = Path(path)
         temporary = None
         try:
-            with tempfile.NamedTemporaryFile(mode='w',encoding='utf-8',dir=target.parent,
+            with tempfile.NamedTemporaryFile(mode='wb',dir=target.parent,
                                              prefix=target.name+'.',suffix='.tmp',delete=False) as stream:
                 temporary = Path(stream.name)
-                json.dump(data,stream,ensure_ascii=False,indent=2)
+                stream.write(content)
             os.replace(temporary,target)
         finally:
             if temporary is not None and temporary.exists():
                 temporary.unlink()
+
+    def _write_json(self,path):
+        self.finish_section_rename()
+        data = self.collect()
+        target = Path(path)
+        self._write_file(target,json.dumps(data,ensure_ascii=False,indent=2).encode('utf-8'))
         self.json_path,self.last_dir = str(target),str(target.parent)
         self.saved_data = data
         self.set_dirty(False)
@@ -2671,7 +2738,7 @@ class StudioApp(tk.Tk):
         try:
             with PDF_LOCK:
                 pdf,pages,links,af = self.engine.render_pdf(self.collect())
-            Path(path).write_bytes(pdf)
+            self._write_file(path,pdf)
             self.last_pdf,self.last_dir = path,str(Path(path).parent)
             self.status.set(f'Exported {Path(path).name} · {pages} '+('page' if pages==1 else 'pages'))
             if pages>1:
@@ -2714,10 +2781,11 @@ class StudioApp(tk.Tk):
             'Select text, then use B, I, or Link in its toolbar. Bold and italic can be combined. '
             'Click Clear to remove formatting. With no selection, formatting applies to what you type next.\n\n'
             'Ctrl+B    Bold\nCtrl+I      Italic\nCtrl+K    Insert or edit link\nCtrl+Z / Ctrl+Y    Undo / redo\n\n'
-            'Ctrl+S    Save\nCtrl+Shift+S    Save as\nCtrl+O    Open\nCtrl+E    Export PDF\n\n'
+            'Ctrl+N    New CV\nCtrl+S    Save\nCtrl+Shift+S    Save as\nCtrl+O    Open\nCtrl+E    Export PDF\nCtrl+0    Fit preview to page\n\n'
             '+ Add Section creates a custom category. Name it in the sidebar; Enter saves, Esc cancels. '
             'Drag to reorder, double-click or press F2 to rename. Right-click a category and toggle Show on CV to hide/show it without deleting content.\n\n'
-            'Design → Workspace offers light/dark mode and button themes; PDF colours are separate.\n\n'
+            'The summary shows a live word count. Design → Workspace offers light/dark mode and Minimal or Vibrant style. '
+            'Button colours are available in Vibrant; PDF colours are separate.\n\n'
             'Double-click PDF text to jump to its field.\nDouble-click a Document sidebar section to rename it. Drag to reorder; right-click for options.\n'
             'Use each entry’s … menu to move, duplicate, or remove it.\n'
             'Hold Shift while scrolling to move horizontally in the preview.')

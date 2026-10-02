@@ -4,7 +4,7 @@ A desktop CV editor with visual rich text, live PDF preview, six layouts, photo 
 
 ## Install and run
 
-Use **Python 3.10 or newer with Tkinter** on a Windows, macOS, or Linux desktop. Download/clone the whole repository, then open a terminal in its folder. Keep all `cv_studio_*.py` modules beside `CV_Studio_Generic.py`, including `cv_studio_appearance.py`; no sibling application or parent folder is required.
+Use **Python 3.10 or newer with Tkinter** on a Windows, macOS, or Linux desktop. Download/clone the whole repository, then open a terminal in its folder. Keep all `cv_studio_*.py` modules beside `CV_Studio_Generic.py`, including `cv_studio_appearance.py` and `cv_studio_data.py`; no sibling application or parent folder is required.
 
 ### Windows
 
@@ -32,6 +32,23 @@ A graphical desktop/display is required; this is not a browser app. Headless GUI
 
 PDF fonts are discovered relative to the application and in platform font folders. ReportLab's bundled Bitstream Vera family is the fallback, so fonts from the author's computer are not required. Optionally put `DejaVuSans.ttf`, `DejaVuSans-Bold.ttf`, `DejaVuSans-Oblique.ttf`, and `DejaVuSans-BoldOblique.ttf` in a `fonts/` directory beside the launcher.
 
+## CV layouts
+
+Each layout uses the same editable document, live links, and click-to-edit preview:
+
+| Layout | Design |
+| --- | --- |
+| Modern Professional | The original shaded summary panel, skills grid, structured experience columns, and GPA panel. |
+| Minimal / ATS-friendly | Restrained monochrome typography and a straightforward reading order. |
+| Executive | The original split masthead and editorial section labels beside the content. |
+| Academic / Research | A centered identity, serif body text, and flowing research and publication entries. |
+| Two-Column | The original continuous section rail, delicate separators, and generous main column. |
+| Creative / Photo CV | The original portrait sidebar, dark section rail, and timeline details. |
+
+Body paragraphs and wrapped bullet text use full justification, with the final line left aligned. Headings, dates, contact entries, and short labels keep their natural alignment. Contact entries wrap together; separators appear only between entries on the same line. Long URLs retain their full clickable target.
+
+**Prefer one page** adjusts vertical gaps and line spacing before reducing text. It keeps useful spacing improvements that reduce overflow even when a longer CV still needs multiple pages. Text is reduced only when it saves a page, with a maximum reduction of 8%; manually reduced text is not shrunk further. CVs that already fit one page remain unchanged. Your margins, template design and content stay intact. Turning the option off preserves the selected layout exactly.
+
 ## Flexible custom sections
 
 1. Choose **+ Add Section** in the Document sidebar and name it in place.
@@ -55,14 +72,16 @@ Pairs are measured against the actual space available in the chosen template. Lo
 ## Editing and export
 
 - **Ctrl+B / Ctrl+I / Ctrl+K**: bold, italic, and links in rich-text fields.
+- **Ctrl+N / Ctrl+0**: create a new CV and fit the preview to the page.
 - **Ctrl+S / Ctrl+Shift+S / Ctrl+O**: save, save as, and open CV data.
+- **Profile** shows a live summary word count. The editor and preview keep usable minimum widths when resizing the window; photo controls also fit compact windows.
 - **Ctrl+E**: export PDF. Double-click preview text to reveal its editor field; double-click a section heading to rename it directly in the sidebar.
 - **Design → Workspace → Interface style**: New CVs open in Dark mode with Minimal style, using flat controls, neutral surfaces, and quiet section buttons. Select Vibrant for the previous colourful, raised design. Older documents saved with the name Original open as Vibrant. Sidebar categories no longer show hover popups.
 - **Design → Workspace → Button theme** appears only with Vibrant selected: Ocean, Teal, Forest, Violet, Rose, or Graphite. These colours work in light and dark mode, update immediately without recreating editors or rebuilding the PDF, and are saved as `settings.ui_theme`. Minimal keeps neutral controls regardless of this saved setting.
 - **Design** also contains PDF layout, PDF colour theme, text scale, margins, and AutoFit. The PDF colour theme, document layout and workspace button theme are independent. Section management lives in the sidebar, not a duplicate Design panel.
 - **Creative / Photo CV**: upload PNG/JPEG, crop/zoom/reposition, replace, or remove a portrait. Images and crop settings are embedded in JSON, not saved as machine-specific source paths.
 
-The application can be launched from any working directory. Save/open/export locations are chosen through file dialogs; JSON files can be moved to another computer. Legacy CV JSON files remain readable. Keep private CV data outside the source repository; the included ignore rules cover PDF exports and files named `my_cv*.json`, not every possible JSON filename.
+The application can be launched from any working directory. Save/open/export locations are chosen through file dialogs; JSON files can be moved to another computer. JSON saves and PDF exports replace the destination only after the new file is written successfully. Legacy CV JSON files remain readable, including highlights stored as multiline text. Invalid file shapes are reported before replacing your open CV; empty fields and unsupported design settings are normalized. Keep private CV data outside the source repository; the included ignore rules cover PDF exports and files named `my_cv*.json`, not every possible JSON filename.
 
 ## Tests
 
@@ -73,6 +92,7 @@ python -m unittest discover -s tests -v
 python tests/test_entries.py --gui
 python tests/test_entry_layouts.py --gui
 python tests/test_appearance.py --gui
+python tests/test_workflows.py --gui
 ```
 
 The unit suite checks mixed-entry migration, compact layout geometry, ordering, all PDF layouts, long content, links, source locations, theme text contrast, PDF independence from workspace colours, and a relocated copy with bundled fonts. The optional GUI suites open a window to check themes, sidebar visibility, pickers, fields, focus, rich text, reordering, two-column preview navigation, save/reopen, and export. Add `--screenshots` to write review images into the ignored `test_artifacts/` directory.

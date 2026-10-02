@@ -11,6 +11,7 @@ from unittest.mock import patch
 
 sys.path.insert(0,str(Path(__file__).resolve().parent))
 from test_entries import engine, ROOT, settle
+from gui_support import save_screenshot
 from cv_studio_appearance import (BUTTON_THEMES, DEFAULT_UI_THEME, DEFAULT_UI_MODE, DEFAULT_UI_STYLE, UI_STYLES,
                                   theme_palette, minimal_palette, navigation_material)
 from cv_studio_ui import PALETTES, MINIMAL_PALETTES, NavigationButton, InspectorGroup
@@ -134,27 +135,7 @@ def gui_checks(screenshots=False):
 
     def capture(name):
         if screenshots:
-            from PIL import ImageGrab
-            output = ROOT/'test_artifacts'
-            output.mkdir(exist_ok=True)
-            start = time.monotonic()
-            settle(app,lambda:time.monotonic()-start>.3)
-            import inspect
-            if sys.platform=='win32' and 'window' in inspect.signature(ImageGrab.grab).parameters:
-                from ctypes import wintypes
-                get_root = ctypes.windll.user32.GetAncestor
-                get_root.argtypes = (wintypes.HWND,wintypes.UINT)
-                get_root.restype = wintypes.HWND
-                target = app.popup if app.popup is not None else app
-                # Capture only this window, even if another application covers
-                # it; never save unrelated desktop content in test artifacts.
-                shot = ImageGrab.grab(window=get_root(target.winfo_id(),2))
-            else:
-                app.lift()
-                app.update()
-                x,y = app.winfo_rootx(),app.winfo_rooty()
-                shot = ImageGrab.grab(bbox=(x,y,x+app.winfo_width(),y+app.winfo_height()))
-            shot.save(output/(name+'.png'))
+            save_screenshot(app, ROOT/'test_artifacts'/(name+'.png'), settle)
 
     def pdf_double_click(source):
         target = next(r for r in app._source_map if r['source']==source)

@@ -57,7 +57,7 @@ def minimal_palette(base, mode):
                    accent_text=base['bg'],
                    tint=blend(base['rail'], base['text'], .10 if dark else .055),
                    hover=blend(base['rail'], base['text'], .075 if dark else .035),
-                   focus_line=accent,
+                   focus_line=blend(base['line'],base['text'],.45 if dark else .35),
                    button_face=base['surface'],
                    button_line=base['line'],
                    button_ink=base['text'],
