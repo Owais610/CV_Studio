@@ -1,0 +1,68 @@
+CV Studio 1.0.0 - Generic Windows application
+
+Application source and build scripts for this release:
+https://github.com/Owais610/CV_Studio/tree/v1.0.0
+Source archive:
+https://github.com/Owais610/CV_Studio/archive/refs/tags/v1.0.0.zip
+
+CV Studio's authored source is provided under the MIT license in LICENSE.
+The bundled libraries retain their own licenses. In particular, the open-source
+PyMuPDF/MuPDF used by this Windows build is provided under GNU AGPL version 3;
+the MIT license does not replace the terms applicable to those components.
+The full license texts follow in CV Studio-LICENSES.txt in the release ZIP and
+are also embedded in the executable under licenses/third-party/.
+
+Bundled runtime and libraries (unmodified upstream components)
+------------------------------------------------------------
+
+Python 3.14.5
+Source: https://github.com/python/cpython/tree/v3.14.5
+License: LICENSE_PYTHON_3.14.5.txt, copied verbatim from this Python installation.
+This file includes the PSF license, Python's historical licenses, and notices
+for libraries incorporated in the Python runtime.
+
+Tcl 8.6.15 and Tk 8.6.15
+Sources: https://github.com/tcltk/tcl/tree/core-8-6-15
+         https://github.com/tcltk/tk/tree/core-8-6-15
+Licenses: LICENSE_TCL_8.6.15.txt and LICENSE_TK_8.6.15.txt.
+The Tcl license is copied from the exact upstream source tag; the Tk license
+is copied verbatim from the bundled runtime's license.terms.
+
+ReportLab 5.0.1
+Source distribution: https://pypi.org/project/reportlab/5.0.1/#files
+License: LICENSE_REPORTLAB_5.0.1.txt, copied verbatim from the installed package.
+The bundled ReportLab font files include Bitstream Vera and DarkGarden:
+LICENSE_REPORTLAB_VERA.txt, NOTICE_REPORTLAB_DARKGARDEN.txt, and
+LICENSE_REPORTLAB_DARKGARDEN_GPL2.txt preserve their original terms and notices.
+
+PyMuPDF 1.28.2 and MuPDF 1.28.2
+Sources: https://github.com/pymupdf/PyMuPDF/tree/1.28.2
+         https://github.com/ArtifexSoftware/mupdf/tree/1.28.2
+License: GNU AGPL version 3; see LICENSE_AGPL3_PYMUPDF_MUPDF.txt.
+The full text is copied verbatim from PyMuPDF 1.28.2's source COPYING.
+NOTICE_PYMUPDF_1.28.2.txt preserves the installed package's dual-license notice.
+This build uses the open-source package, not an Artifex commercial license.
+
+Pillow 12.3.0
+Source distribution: https://pypi.org/project/pillow/12.3.0/#files
+License: LICENSE_PILLOW_12.3.0.txt, copied verbatim from the installed package.
+This file includes Pillow/PIL and the native imaging libraries' notices.
+
+charset-normalizer 3.5.2
+Source distribution: https://pypi.org/project/charset-normalizer/3.5.2/#files
+License: LICENSE_CHARSET_NORMALIZER_3.5.2.txt, copied from the installed package.
+
+DejaVu Sans 2.35 (regular, bold, oblique and bold oblique)
+Source: https://sourceforge.net/projects/dejavu/files/dejavu/2.35/
+License: assets/fonts/LICENSE_DEJAVU in the source repository, embedded as
+fonts/LICENSE_DEJAVU and included in CV Studio-LICENSES.txt.
+These unmodified font files were supplied by Matplotlib's mpl-data/fonts/ttf
+distribution; the application does not bundle Matplotlib itself.
+
+PyInstaller 6.22.3 bootloader
+Source: https://github.com/pyinstaller/pyinstaller/tree/v6.22.3
+License: LICENSE_PYINSTALLER_6.22.3.txt, copied verbatim from the installed
+package. It includes the bootloader exception and incorporated code notices.
+
+The Generic build contains placeholder CV content only. It does not contain
+personal CV documents, exported PDFs, build environments, logs, or shortcuts.

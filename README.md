@@ -2,7 +2,45 @@
 
 A desktop CV editor with visual rich text, live PDF preview, six layouts, photo cropping, and reusable custom sections. The starter document contains placeholders, not personal CV data.
 
-## Install and run
+## Windows app
+
+[**Download CV Studio for Windows**](https://github.com/Owais610/CV_Studio/releases/latest)
+— get `CV Studio-Windows.zip`, extract it, and double-click `CV Studio.exe`.
+Releases also include `SHA256SUMS.txt` to verify downloaded files.
+
+The Generic edition can run as a standalone **CV Studio.exe**. Double-click it to
+open the editor; Python and a terminal are not required. The Windows build includes
+the preview libraries, application icon and PDF fonts.
+
+After building, double-click the **CV Studio** shortcut in the repository folder,
+or run `dist/CV Studio.exe` directly. `dist/CV Studio-Windows.zip`
+contains the executable and its readme/license notices for sharing. Save editable
+CVs as JSON and export finished documents as PDF using the existing file dialogs.
+You can move the executable to another folder without moving your documents.
+
+### Build the Windows app
+
+On a 64-bit Windows desktop with Python 3.10+ and Tcl/Tk, run from the repository:
+
+```powershell
+powershell -NoProfile -ExecutionPolicy Bypass -File scripts/build_windows.ps1
+```
+
+The script creates an isolated `.build-venv`, installs the tested build dependencies,
+and packages **only the Generic edition**. It then checks the actual executable
+from another working directory without Python on its PATH: all six PDF layouts,
+preview images, photo cropping, JSON saves and PDF export. A failed check stops
+the build. `build/`, `dist/` and the build environment are ignored by Git.
+
+The execution-policy setting applies only to this build command. Later builds can
+use `-SkipInstall` when the build environment is already prepared. The executable
+is built with [PyInstaller](https://pyinstaller.org/en/stable/usage.html), which
+bundles the runtime and libraries into the app. This build targets Windows; builds
+for other operating systems need to be produced on those systems.
+
+App errors are logged locally in `%LOCALAPPDATA%\CV Studio\app.log`.
+
+## Run from source
 
 Use **Python 3.10 or newer with Tkinter** on a Windows, macOS, or Linux desktop. Download/clone the whole repository, then open a terminal in its folder. Keep all `cv_studio_*.py` modules beside `CV_Studio_Generic.py`, including `cv_studio_appearance.py` and `cv_studio_data.py`; no sibling application or parent folder is required.
 

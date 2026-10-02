@@ -1,0 +1,10 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="256" height="256" viewBox="0 0 256 256">
+  <title>CV Studio</title>
+  <rect x="6" y="6" width="244" height="244" rx="52" fill="#18232F"/>
+  <path d="M80 43H157L188 74V204Q188 216 176 216H80Q68 216 68 204V55Q68 43 80 43Z" fill="#F8FAFC"/>
+  <path d="M157 43L188 74H169Q157 74 157 62Z" fill="#DCE7F3"/>
+  <rect x="88" y="96" width="80" height="11" rx="3" fill="#5186BC"/>
+  <rect x="88" y="129" width="80" height="7" rx="2" fill="#8796A6"/>
+  <rect x="88" y="151" width="80" height="7" rx="2" fill="#8796A6"/>
+  <rect x="88" y="173" width="58" height="7" rx="2" fill="#8796A6"/>
+</svg>

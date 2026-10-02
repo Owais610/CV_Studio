@@ -2,6 +2,11 @@ __pycache__/
 *.pyc
 .venv/
 venv/
+.build-venv/
+build/
+dist/
+*.log
+*.lnk
 .pytest_cache/
 test_artifacts/
 *_BACKUP.py

@@ -153,7 +153,7 @@ THEMES = {
 def setup_fonts():
     here = Path(__file__).resolve().parent
     dirs = [
-        here / "fonts", here,
+        here / "fonts", here / "assets" / "fonts", here,
         Path("/usr/share/fonts/truetype/dejavu"), Path("/usr/share/fonts/dejavu"),
         Path("/usr/share/fonts/TTF"), Path("/Library/Fonts"), Path("/System/Library/Fonts/Supplemental"),
         Path.home() / ".local/share/fonts", Path.home() / ".fonts", Path.home() / "Library/Fonts",
